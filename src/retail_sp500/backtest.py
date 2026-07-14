@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-import numpy as np
 import pandas as pd
 
 from .metrics import summarize
@@ -22,8 +21,8 @@ class BacktestConfig:
             raise ValueError("cash and contributions cannot be negative")
         if self.cash_annual_return <= -1:
             raise ValueError("cash_annual_return must exceed -100%")
-        if self.signal_lag_months < 1:
-            raise ValueError("signal_lag_months must be at least 1 to avoid look-ahead")
+        if self.signal_lag_months < 0:
+            raise ValueError("signal_lag_months cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -33,11 +32,11 @@ class BacktestResult:
     metrics: dict[str, float]
 
 
-def _validate_market(market: pd.DataFrame) -> pd.DataFrame:
-    required = {"price", "total_return"}
+def _validate_market(market: pd.DataFrame, strategy: Strategy) -> pd.DataFrame:
+    required = set(strategy.required_columns)
     missing = sorted(required.difference(market.columns))
     if missing:
-        raise KeyError(f"market data is missing: {', '.join(missing)}")
+        raise KeyError(f"{strategy.name} requires market columns: {', '.join(missing)}")
     if not isinstance(market.index, pd.DatetimeIndex):
         raise TypeError("market data must use a DatetimeIndex")
     if market.index.has_duplicates or not market.index.is_monotonic_increasing:
@@ -52,14 +51,17 @@ def run_backtest(
 ) -> BacktestResult:
     """Run a monthly ETF/cash backtest with start-of-period contributions.
 
-    Strategy weights are shifted by ``signal_lag_months``. Thus a weight
-    computed from month t data first applies to month t+1 under the default.
+    Signal strategies declare their own execution lag. Third-party strategies
+    without that attribute use ``BacktestConfig.signal_lag_months``.
     """
 
     config = config or BacktestConfig()
-    frame = _validate_market(market)
+    frame = _validate_market(market, strategy)
     raw_weights = strategy.target_weights(frame).reindex(frame.index)
-    target_weights = raw_weights.shift(config.signal_lag_months).fillna(0.0).clip(0.0, 1.0)
+    lag_months = getattr(strategy, "execution_lag_months", config.signal_lag_months)
+    if lag_months < 0:
+        raise ValueError("strategy execution lag cannot be negative")
+    target_weights = raw_weights.shift(lag_months).fillna(0.0).clip(0.0, 1.0)
 
     cash_monthly_return = (1.0 + config.cash_annual_return) ** (1.0 / 12.0) - 1.0
     portfolio_value = config.initial_cash

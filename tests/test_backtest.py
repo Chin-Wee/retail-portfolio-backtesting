@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import ClassVar
+
 import pandas as pd
 import pytest
 
@@ -19,6 +22,16 @@ def _market(returns: list[float]) -> pd.DataFrame:
     )
 
 
+@dataclass(frozen=True)
+class LaggedAlwaysInvested:
+    name: str = "Lagged"
+    execution_lag_months: ClassVar[int] = 1
+    required_columns: ClassVar[tuple[str, ...]] = ("price", "total_return")
+
+    def target_weights(self, market: pd.DataFrame) -> pd.Series:
+        return pd.Series(1.0, index=market.index)
+
+
 def test_contribution_contract_with_zero_returns() -> None:
     result = run_backtest(
         _market([0.0, 0.0, 0.0]),
@@ -30,10 +43,20 @@ def test_contribution_contract_with_zero_returns() -> None:
     assert result.metrics["profit"] == pytest.approx(0.0)
 
 
-def test_signal_is_lagged_one_month() -> None:
+def test_unconditional_strategy_is_not_delayed() -> None:
+    result = run_backtest(
+        _market([0.10, 0.10]),
+        BuyAndHold(),
+        BacktestConfig(initial_cash=100.0, monthly_contribution=0.0),
+    )
+    assert result.history["target_weight"].tolist() == [1.0, 1.0]
+    assert result.history["portfolio_value"].iloc[-1] == pytest.approx(121.0)
+
+
+def test_signal_strategy_uses_its_declared_lag() -> None:
     result = run_backtest(
         _market([0.10, 0.10, 0.0]),
-        BuyAndHold(),
+        LaggedAlwaysInvested(),
         BacktestConfig(initial_cash=100.0, monthly_contribution=0.0),
     )
     assert result.history["target_weight"].tolist() == [0.0, 1.0, 1.0]
@@ -52,3 +75,9 @@ def test_drawdown_is_not_masked_by_contributions() -> None:
         BacktestConfig(initial_cash=100.0, monthly_contribution=1_000.0),
     )
     assert result.metrics["max_drawdown"] == pytest.approx(-0.50)
+
+
+def test_strategy_data_requirements_are_enforced() -> None:
+    market = _market([0.0, 0.0]).drop(columns="price")
+    with pytest.raises(KeyError, match="requires market columns: price"):
+        run_backtest(market, BuyAndHold())

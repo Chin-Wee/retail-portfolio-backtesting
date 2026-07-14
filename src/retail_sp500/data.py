@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 SHILLER_DATA_URL: Final[str] = "https://www.econ.yale.edu/~shiller/data/ie_data.xls"
+FRED_TB3MS_CSV_URL: Final[str] = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=TB3MS"
 _REQUIRED_COLUMNS: Final[tuple[str, ...]] = ("date", "price", "dividend", "earnings", "cpi")
 
 
@@ -17,7 +18,7 @@ class DataSchemaError(ValueError):
 
 
 def _download(url: str, timeout_seconds: int = 30) -> bytes:
-    request = Request(url, headers={"User-Agent": "retail-sp500-backtesting/0.1"})
+    request = Request(url, headers={"User-Agent": "retail-sp500-backtesting/0.2"})
     with urlopen(request, timeout=timeout_seconds) as response:
         return response.read()
 
@@ -152,6 +153,57 @@ def load_shiller_data(source: str | Path | bytes | None = None) -> pd.DataFrame:
     return _derive_fields(body)
 
 
+def _read_fred_source(source: str | Path | bytes | None) -> pd.DataFrame:
+    if source is None:
+        return pd.read_csv(BytesIO(_download(FRED_TB3MS_CSV_URL)))
+    if isinstance(source, bytes):
+        return pd.read_csv(BytesIO(source))
+
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return pd.read_csv(path)
+
+
+def load_fred_risk_free_rate(source: str | Path | bytes | None = None) -> pd.Series:
+    """Load FRED TB3MS as an annual decimal risk-free-rate series.
+
+    TB3MS is a monthly average of business-day 3-month Treasury-bill rates on a
+    discount basis. Missing observations remain missing; no synthetic pre-series
+    history is manufactured.
+    """
+
+    raw = _read_fred_source(source)
+    columns = {_normalise_name(column): column for column in raw.columns}
+    date_column = columns.get("date") or columns.get("observationdate")
+    value_column = columns.get("tb3ms")
+    if date_column is None or value_column is None:
+        raise DataSchemaError("FRED risk-free data must contain DATE and TB3MS columns")
+
+    dates = pd.to_datetime(raw[date_column], errors="coerce")
+    values = pd.to_numeric(raw[value_column], errors="coerce") / 100.0
+    valid = dates.notna() & values.notna()
+    if not valid.any():
+        raise DataSchemaError("FRED risk-free data contains no valid observations")
+
+    month_index = dates[valid].dt.to_period("M").dt.to_timestamp()
+    series = pd.Series(values[valid].to_numpy(), index=month_index, name="risk_free_rate")
+    series.index.name = "month"
+    return series.groupby(level=0).last().sort_index()
+
+
+def enrich_with_risk_free_rate(
+    market: pd.DataFrame,
+    source: str | Path | bytes | None = None,
+) -> pd.DataFrame:
+    """Join FRED TB3MS onto monthly market data without pre-inception fallback."""
+
+    rates = load_fred_risk_free_rate(source)
+    enriched = market.join(rates, how="left")
+    enriched["risk_free_rate"] = enriched["risk_free_rate"].ffill()
+    return enriched
+
+
 def synthetic_market_data(periods: int = 240, seed: int = 7) -> pd.DataFrame:
     """Create deterministic monthly data for demos and tests, not research."""
 
@@ -173,6 +225,7 @@ def synthetic_market_data(periods: int = 240, seed: int = 7) -> pd.DataFrame:
             "cpi": cpi,
             "cape": np.clip(rng.normal(24.0, 5.0, periods), 8.0, 45.0),
             "long_rate": np.clip(rng.normal(4.0, 1.0, periods), 0.0, 10.0),
+            "risk_free_rate": np.clip(rng.normal(0.025, 0.008, periods), 0.0, 0.08),
         },
         index=index,
     )
