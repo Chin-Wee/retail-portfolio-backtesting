@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retail-sp500-backtesting"
+version = "0.1.0"
+description = "Auditable monthly S&P 500 strategy backtesting with recurring contributions"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "plotly>=5.18",
+  "xlrd>=2.0.1",
+  "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+sp500-backtest = "retail_sp500.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
