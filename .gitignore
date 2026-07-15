@@ -11,4 +11,5 @@ results/*
 !results/.gitkeep
 data/raw/
 data/processed/
+.ipynb_checkpoints/
 .streamlit/secrets.toml

@@ -1,13 +1,12 @@
 # Retail S&P 500 Backtesting
 
-A small, auditable framework for comparing long-only S&P 500 ETF/cash strategies on one graph.
+A small, auditable framework for comparing long-only S&P 500 ETF/cash strategies through the CLI or thin Jupyter notebooks.
 
 Default portfolio assumptions:
 
 - **$100,000 initial cash**
 - **$1,000 contributed at the start of each subsequent month**
-- fractional ETF units
-- reinvested dividends
+- fractional ETF units and reinvested dividends
 - ETF exposure constrained to 0%–100%
 - no leverage or shorting
 - zero cash return by default, configurable per run
@@ -34,7 +33,7 @@ monthly total return = (price_t + dividend_t / 12) / price_(t-1) - 1
 
 ### Risk-free input
 
-Fractional Kelly requires an explicit risk-free series. The supported source is FRED `TB3MS`, the monthly average 3-month Treasury-bill secondary-market rate on a discount basis:
+Fractional Kelly requires FRED `TB3MS`, a monthly three-month Treasury-bill series:
 
 ```text
 https://fred.stlouisfed.org/graph/fredgraph.csv?id=TB3MS
@@ -44,7 +43,7 @@ The loader converts percentages to annual decimals and does not manufacture obse
 
 ### Current quote
 
-A current SPY quote can be read from Twelve Data using its free personal API tier. This quote path is operational input only; it does not replace Shiller as the historical backtest source.
+A current SPY quote can be read from Twelve Data. This operational path does not replace Shiller as the historical backtest source.
 
 ```bash
 export TWELVE_DATA_API_KEY=...
@@ -52,8 +51,6 @@ sp500-backtest --live-quote --live-symbol SPY
 ```
 
 ## Hotswappable strategies
-
-Use `--strategy` repeatedly to put selected strategies on the same graph.
 
 | Key | Strategy | Data requirement | Execution lag |
 |---|---|---|---:|
@@ -63,18 +60,71 @@ Use `--strategy` repeatedly to put selected strategies on the same graph.
 | `trend-10m` | 10-month moving average with 1% hysteresis | monthly price and total return | 1 month |
 | `vol-target-12` | 12% annualized volatility target | monthly price and total return | 1 month |
 | `trend-vol-12` | Trend gate plus 12% volatility target | monthly price and total return | 1 month |
-| `fractional-kelly` | Quarter-Kelly long-only ceiling, 60-month estimate | total return and FRED risk-free rate | 1 month |
+| `fractional-kelly` | Quarter-Kelly ceiling, 60-month estimate | total return and FRED risk-free rate | 1 month |
 | `cape-scaled` | Gradual CAPE-scaled exposure | CAPE, price and total return | 1 month |
 
-Signal strategies are lagged by one month to reduce look-ahead. Unconditional allocation and staged deployment are not artificially delayed.
-
-List the registry:
+Signal strategies are lagged by one month to reduce look-ahead. Unconditional allocations are not artificially delayed.
 
 ```bash
 sp500-backtest --list-strategies
 ```
 
-Run a subset:
+## Local setup with Jupyter
+
+The repository includes a setup script that creates `.venv`, installs the editable package and development dependencies, and registers the notebook kernel:
+
+```bash
+./scripts/setup_jupyter.sh
+source .venv/bin/activate
+jupyter lab
+```
+
+Select this kernel inside JupyterLab:
+
+```text
+Retail Portfolio Backtesting
+```
+
+Manual equivalent:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+python -m ipykernel install \
+  --user \
+  --name retail-portfolio-backtesting \
+  --display-name "Retail Portfolio Backtesting"
+jupyter lab
+```
+
+The editable install means changes under `src/retail_sp500/` are available to notebooks. Each notebook enables IPython autoreload for development.
+
+## Included notebooks
+
+- `notebooks/01_strategy_comparison.ipynb` — select registry strategies and compare metrics and portfolio values.
+- `notebooks/02_parameter_experiments.ipynb` — compare a compact set of trend and volatility parameters.
+- `notebooks/03_rolling_window_analysis.ipynb` — measure start-date sensitivity over rolling horizons.
+- `notebooks/04_limit_order_research.ipynb` — catalogue limit-order approaches and define the daily OHLC execution contract required before implementation.
+
+Reusable logic stays in ordinary Python modules. Notebook outputs and execution counts are intentionally not committed.
+
+## CLI backtesting
+
+Run every strategy supported by Shiller data:
+
+```bash
+sp500-backtest --output results
+```
+
+Enable fractional Kelly with FRED enrichment:
+
+```bash
+sp500-backtest --fetch-risk-free --output results
+```
+
+Run selected strategies:
 
 ```bash
 sp500-backtest \
@@ -85,42 +135,7 @@ sp500-backtest \
   --output results
 ```
 
-When no `--strategy` is supplied, every strategy supported by the loaded columns runs. Unsupported strategies are skipped with an explicit missing-column message. Explicitly selecting an unsupported strategy fails instead of silently substituting data.
-
-## Deliberately excluded
-
-These ideas are not implemented in the shared monthly engine:
-
-- two-day RSI and other short-horizon mean reversion
-- Hidden Markov regime switching
-- overnight-versus-intraday and calendar/session effects
-- shorting, options and leverage
-
-They require daily or intraday adjusted execution data, introduce a materially shorter comparison horizon, and would create a second backtest system with different dividend and fill assumptions. They should only be added with a separately validated daily-data contract.
-
-## Setup
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-```
-
-## Backtesting
-
-Official Shiller download, with all strategies that do not require FRED:
-
-```bash
-sp500-backtest --output results
-```
-
-Enable Kelly with official FRED enrichment:
-
-```bash
-sp500-backtest --fetch-risk-free --output results
-```
-
-Use local source copies:
+Use local data files:
 
 ```bash
 sp500-backtest \
@@ -132,7 +147,7 @@ sp500-backtest \
 Offline deterministic demonstration:
 
 ```bash
-python -m retail_sp500.cli --synthetic --output results
+sp500-backtest --synthetic --output results
 ```
 
 Generated files:
@@ -143,7 +158,18 @@ results/metrics.json
 results/comparison.html
 ```
 
-The Plotly legend controls the shared graph: click a strategy to hide or show it, and double-click one strategy to isolate it.
+The Plotly legend can hide, show, or isolate strategies on the shared graph.
+
+## Limit-order boundary
+
+The monthly Shiller dataset cannot establish whether an intramonth limit price was touched or determine price sequencing inside a month. Limit-order testing therefore remains a documented research scaffold until the repository has:
+
+- reliable split-adjusted daily OHLC data;
+- explicit order placement, expiry and cancellation rules;
+- conservative gap and same-bar ambiguity handling;
+- separate dividend, cash-yield and transaction-cost accounting.
+
+Short-horizon RSI, HMM regimes, session effects, shorting, options and leverage remain outside the shared monthly engine.
 
 ## Add a strategy
 
@@ -152,6 +178,7 @@ Implement `target_weights()` and register a `StrategyDefinition`:
 ```python
 from dataclasses import dataclass
 from typing import ClassVar
+
 import pandas as pd
 
 @dataclass(frozen=True)
@@ -170,13 +197,10 @@ class MyStrategy:
 ```bash
 python -m pytest -q
 python -m compileall -q src
-python -m retail_sp500.cli --synthetic --list-strategies
-python -m retail_sp500.cli \
-  --synthetic \
-  --strategy buy-hold \
-  --strategy trend-vol-12 \
-  --strategy fractional-kelly \
-  --output /tmp/retail-portfolio-strategies
+python -m json.tool notebooks/01_strategy_comparison.ipynb >/dev/null
+python -m json.tool notebooks/02_parameter_experiments.ipynb >/dev/null
+python -m json.tool notebooks/03_rolling_window_analysis.ipynb >/dev/null
+python -m json.tool notebooks/04_limit_order_research.ipynb >/dev/null
 ```
 
 No automatic GitHub Actions workflow is included.
@@ -185,7 +209,7 @@ No automatic GitHub Actions workflow is included.
 
 - Strategy parameters can be overfit to the history used to evaluate them.
 - Monthly averages are not guaranteed executable prices.
-- Kelly sizing is highly sensitive to expected-return estimates; this implementation uses quarter Kelly and caps exposure at 100%.
+- Kelly sizing is highly sensitive to expected-return estimates.
 - CAPE is a long-horizon valuation measure, not a precise crash timer.
 - Expense ratios, spreads, taxes, tracking error and SGD/USD effects are not included.
 - Historical results do not establish future profitability.

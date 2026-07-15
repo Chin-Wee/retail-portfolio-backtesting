@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retail-sp500-backtesting"
-version = "0.2.0"
+version = "0.3.0"
 description = "Auditable monthly S&P 500 strategy backtesting with recurring contributions"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+  "pytest>=8.0",
+  "jupyterlab>=4.0",
+  "ipykernel>=6.0",
+]
 
 [project.scripts]
 sp500-backtest = "retail_sp500.cli:main"
