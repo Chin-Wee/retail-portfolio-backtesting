@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retail-sp500-backtesting"
-version = "0.3.0"
-description = "Auditable monthly S&P 500 strategy backtesting with recurring contributions"
+version = "0.4.0"
+description = "Auditable S&P 500 allocation and daily limit-order research"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

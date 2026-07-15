@@ -1,91 +1,98 @@
 # Retail S&P 500 Backtesting
 
-A small, auditable framework for comparing long-only S&P 500 ETF/cash strategies through the CLI or thin Jupyter notebooks.
+An auditable research workspace for two distinct questions:
 
-Default portfolio assumptions:
+1. **Monthly ETF/cash allocation strategies** using the long Shiller history.
+2. **Daily limit-order execution research** using real SPY OHLCV data.
 
-- **$100,000 initial cash**
-- **$1,000 contributed at the start of each subsequent month**
-- fractional ETF units and reinvested dividends
-- ETF exposure constrained to 0%–100%
-- no leverage or shorting
-- zero cash return by default, configurable per run
+These paths are intentionally separate. Monthly averages cannot prove that a daily limit order filled.
 
-## Data architecture
+## Current data paths
 
-### Canonical long-history backtests
+### Monthly allocation research
 
-Robert Shiller's monthly `ie_data.xls` dataset is the canonical source:
+The allocation notebooks and CLI use Robert Shiller's monthly U.S. equity dataset. It includes price, dividends, earnings, CPI, interest rates and CAPE. This path remains useful for slow allocation rules such as buy-and-hold, trend and volatility targeting.
 
-```text
-https://www.econ.yale.edu/~shiller/data/ie_data.xls
-```
+The monthly engine is still undergoing a mathematical audit. Do not use its present strategy ranking as investment advice.
 
-It combines price, dividends, earnings, CPI, long interest rates and CAPE. The framework derives ordinary P/E, yields, inflation, total-return approximations, real returns, moving averages and realized volatility.
+### Daily limit-order research
 
-The formally constituted 500-stock S&P 500 began in 1957. Earlier observations represent a reconstructed predecessor U.S. large-cap composite rather than the same investable ETF.
+`notebooks/04_limit_order_research.ipynb` uses Twelve Data's real `1day` SPY OHLCV endpoint.
 
-The Shiller dividend series is annualised/interpolated. Monthly reinvestment is approximated as:
+Default research window:
 
 ```text
-monthly total return = (price_t + dividend_t / 12) / price_(t-1) - 1
+2007-06-01 through the latest available trading session
 ```
 
-### Risk-free input
+This keeps the request below the provider's 5,000-row single-request ceiling while retaining the global financial crisis, COVID shock and recent rate cycle.
 
-Fractional Kelly requires FRED `TB3MS`, a monthly three-month Treasury-bill series:
-
-```text
-https://fred.stlouisfed.org/graph/fredgraph.csv?id=TB3MS
-```
-
-The loader converts percentages to annual decimals and does not manufacture observations before the FRED series begins.
-
-### Current quote
-
-A current SPY quote can be read from Twelve Data. This operational path does not replace Shiller as the historical backtest source.
+The first run requires:
 
 ```bash
-export TWELVE_DATA_API_KEY=...
-sp500-backtest --live-quote --live-symbol SPY
+export TWELVE_DATA_API_KEY="your-key"
 ```
 
-## Hotswappable strategies
-
-| Key | Strategy | Data requirement | Execution lag |
-|---|---|---|---:|
-| `buy-hold` | 100% ETF buy-and-hold | monthly price and total return | 0 months |
-| `staged-buy-hold-6m` | Six-month deterministic deployment ramp | monthly price and total return | 0 months |
-| `fixed-60-40` | 60% ETF / 40% cash | monthly price and total return | 0 months |
-| `trend-10m` | 10-month moving average with 1% hysteresis | monthly price and total return | 1 month |
-| `vol-target-12` | 12% annualized volatility target | monthly price and total return | 1 month |
-| `trend-vol-12` | Trend gate plus 12% volatility target | monthly price and total return | 1 month |
-| `fractional-kelly` | Quarter-Kelly ceiling, 60-month estimate | total return and FRED risk-free rate | 1 month |
-| `cape-scaled` | Gradual CAPE-scaled exposure | CAPE, price and total return | 1 month |
-
-Signal strategies are lagged by one month to reduce look-ahead. Unconditional allocations are not artificially delayed.
-
-```bash
-sp500-backtest --list-strategies
-```
-
-## Local setup with Jupyter
-
-The repository includes a setup script that creates `.venv`, installs the editable package and development dependencies, and registers the notebook kernel:
-
-```bash
-./scripts/setup_jupyter.sh
-source .venv/bin/activate
-jupyter lab
-```
-
-Select this kernel inside JupyterLab:
+Validated data is cached locally at:
 
 ```text
-Retail Portfolio Backtesting
+data/processed/spy_daily_1day.csv
 ```
 
-Manual equivalent:
+The cache is ignored by Git. The loader rejects duplicate sessions, invalid OHLC relationships, non-positive prices and future-dated rows.
+
+## Why an earlier graph reached 2040
+
+The notebooks previously defaulted to a deterministic synthetic smoke-test series:
+
+```python
+synthetic_market_data(periods=600)
+```
+
+That series begins in January 2000 and therefore extends to December 2049. It was not a forecast and was not real market data. The notebooks now default to real data; synthetic data is opt-in only.
+
+## Limit-order experiment currently implemented
+
+For each trading session `t`:
+
+1. Observe the preceding close `close[t-1]`.
+2. Set a buy limit:
+
+   ```text
+   limit = close[t-1] × (1 - discount)
+   ```
+
+3. During session `t`:
+   - if `open[t] <= limit`, fill at the opening price;
+   - otherwise, if `low[t] <= limit`, fill at the limit;
+   - otherwise remain in cash for that one-session experiment.
+
+The notebook evaluates a discount grid and reports:
+
+- fill rate;
+- gap-fill rate;
+- conditional fill discount;
+- unfilled rising-session rate;
+- mean one-session value versus buying at the open.
+
+The best row is only a **candidate for this exact one-session objective and sample**. It is not yet a universal portfolio optimum.
+
+## Not yet implemented in the daily execution engine
+
+A portfolio-grade limit-order model still needs:
+
+- persistent monthly contribution lots;
+- multi-day order expiry and cancellation;
+- market-on-expiry or time-decay rules;
+- dividends and ex-dividend order treatment;
+- split handling;
+- cash yield;
+- transaction costs and spread assumptions;
+- rolling out-of-sample evaluation.
+
+Those choices materially change the optimal limit distance and must remain explicit.
+
+## Setup
 
 ```bash
 python3.11 -m venv .venv
@@ -96,100 +103,48 @@ python -m ipykernel install \
   --user \
   --name retail-portfolio-backtesting \
   --display-name "Retail Portfolio Backtesting"
+```
+
+Or use:
+
+```bash
+./scripts/setup_jupyter.sh
+```
+
+Start Jupyter:
+
+```bash
+source .venv/bin/activate
 jupyter lab
 ```
 
-The editable install means changes under `src/retail_sp500/` are available to notebooks. Each notebook enables IPython autoreload for development.
+Select the kernel:
 
-## Included notebooks
-
-- `notebooks/01_strategy_comparison.ipynb` — select registry strategies and compare metrics and portfolio values.
-- `notebooks/02_parameter_experiments.ipynb` — compare a compact set of trend and volatility parameters.
-- `notebooks/03_rolling_window_analysis.ipynb` — measure start-date sensitivity over rolling horizons.
-- `notebooks/04_limit_order_research.ipynb` — catalogue limit-order approaches and define the daily OHLC execution contract required before implementation.
-
-Reusable logic stays in ordinary Python modules. Notebook outputs and execution counts are intentionally not committed.
-
-## CLI backtesting
-
-Run every strategy supported by Shiller data:
-
-```bash
-sp500-backtest --output results
+```text
+Retail Portfolio Backtesting
 ```
 
-Enable fractional Kelly with FRED enrichment:
+## Notebooks
+
+- `01_strategy_comparison.ipynb` — real monthly Shiller strategy comparison.
+- `02_parameter_experiments.ipynb` — real monthly parameter experiments.
+- `03_rolling_window_analysis.ipynb` — provisional monthly rolling analysis.
+- `04_limit_order_research.ipynb` — real daily SPY limit-distance research.
+
+## CLI monthly backtesting
 
 ```bash
+sp500-backtest --list-strategies
+sp500-backtest --output results
 sp500-backtest --fetch-risk-free --output results
 ```
 
-Run selected strategies:
-
-```bash
-sp500-backtest \
-  --fetch-risk-free \
-  --strategy buy-hold \
-  --strategy trend-vol-12 \
-  --strategy fractional-kelly \
-  --output results
-```
-
-Use local data files:
-
-```bash
-sp500-backtest \
-  --data /path/to/ie_data.xls \
-  --risk-free-data /path/to/TB3MS.csv \
-  --output results
-```
-
-Offline deterministic demonstration:
-
-```bash
-sp500-backtest --synthetic --output results
-```
-
-Generated files:
+Generated monthly outputs:
 
 ```text
 results/backtests.csv
 results/metrics.json
 results/comparison.html
-```
-
-The Plotly legend can hide, show, or isolate strategies on the shared graph.
-
-## Limit-order boundary
-
-The monthly Shiller dataset cannot establish whether an intramonth limit price was touched or determine price sequencing inside a month. Limit-order testing therefore remains a documented research scaffold until the repository has:
-
-- reliable split-adjusted daily OHLC data;
-- explicit order placement, expiry and cancellation rules;
-- conservative gap and same-bar ambiguity handling;
-- separate dividend, cash-yield and transaction-cost accounting.
-
-Short-horizon RSI, HMM regimes, session effects, shorting, options and leverage remain outside the shared monthly engine.
-
-## Add a strategy
-
-Implement `target_weights()` and register a `StrategyDefinition`:
-
-```python
-from dataclasses import dataclass
-from typing import ClassVar
-
-import pandas as pd
-
-@dataclass(frozen=True)
-class MyStrategy:
-    name: str = "My strategy"
-    execution_lag_months: ClassVar[int] = 1
-    required_columns: ClassVar[tuple[str, ...]] = ("price", "total_return")
-
-    def target_weights(self, market: pd.DataFrame) -> pd.Series:
-        signal = market["price"] > market["price"].rolling(12).mean()
-        return signal.astype(float)
 ```
 
 ## Validation
@@ -204,12 +159,3 @@ python -m json.tool notebooks/04_limit_order_research.ipynb >/dev/null
 ```
 
 No automatic GitHub Actions workflow is included.
-
-## Backtest cautions
-
-- Strategy parameters can be overfit to the history used to evaluate them.
-- Monthly averages are not guaranteed executable prices.
-- Kelly sizing is highly sensitive to expected-return estimates.
-- CAPE is a long-horizon valuation measure, not a precise crash timer.
-- Expense ratios, spreads, taxes, tracking error and SGD/USD effects are not included.
-- Historical results do not establish future profitability.
