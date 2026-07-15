@@ -141,10 +141,7 @@ open results/daily_limits/strategy_calmar_ranking.html
 open results/daily_limits/strategy_return_vs_drawdown.html
 open results/daily_limits/strategy_wealth_comparison.html
 open results/daily_limits/strategy_drawdown_comparison.html
-results/daily_limits/strategy_calmar_ranking.html
-results/daily_limits/strategy_return_vs_drawdown.html
-results/daily_limits/strategy_wealth_comparison.html
-results/daily_limits/strategy_drawdown_comparison.html
+open results/daily_limits/walk_forward_selected_discount.html
 open results/daily_limits/walk_forward_test_calmar.html
 ```
 
@@ -162,7 +159,6 @@ Select the `Retail Portfolio Backtesting` kernel.
 3. `03_rolling_window_analysis.ipynb` — Calmar-selected walk-forward graphs on unseen years.
 4. `04_limit_order_research.ipynb` — final charts comparing immediate investment, fixed pullbacks, terminal-value winners, Calmar winners, and the walk-forward candidate.
 5. `05_calmar_ratio_exploration.ipynb` — dedicated Calmar sensitivity and top-strategy chart exploration.
-
 
 ## Final strategy dashboard
 
