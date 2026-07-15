@@ -1,151 +1,128 @@
-# Retail S&P 500 Backtesting
+# Retail SPY Limit-Order Research
 
-An auditable research workspace for two distinct questions:
+An auditable research workspace for finding practical buy-limit distances below the preceding SPY close using **real daily OHLCV data**.
 
-1. **Monthly ETF/cash allocation strategies** using the long Shiller history.
-2. **Daily limit-order execution research** using real SPY OHLCV data.
+The repository retains the older monthly S&P 500 allocation engine, but every Jupyter notebook now uses the real daily path. Monthly Shiller averages cannot establish whether a daily limit order filled.
 
-These paths are intentionally separate. Monthly averages cannot prove that a daily limit order filled.
+## Data source
 
-## Current data paths
+The daily workflow uses Twelve Data's official `1day` SPY OHLCV endpoint.
 
-### Monthly allocation research
-
-The allocation notebooks and CLI use Robert Shiller's monthly U.S. equity dataset. It includes price, dividends, earnings, CPI, interest rates and CAPE. This path remains useful for slow allocation rules such as buy-and-hold, trend and volatility targeting.
-
-The monthly engine is still undergoing a mathematical audit. Do not use its present strategy ranking as investment advice.
-
-### Daily limit-order research
-
-`notebooks/04_limit_order_research.ipynb` uses Twelve Data's real `1day` SPY OHLCV endpoint.
-
-Default research window:
+Default window:
 
 ```text
 2007-06-01 through the latest available trading session
 ```
 
-This keeps the request below the provider's 5,000-row single-request ceiling while retaining the global financial crisis, COVID shock and recent rate cycle.
-
-The first run requires:
-
-```bash
-export TWELVE_DATA_API_KEY="your-key"
-```
-
-Validated data is cached locally at:
+The request explicitly asks for 5,000 rows, validates OHLC relationships, rejects duplicate and future-dated sessions, checks for likely truncation, and caches the result at:
 
 ```text
 data/processed/spy_daily_1day.csv
 ```
 
-The cache is ignored by Git. The loader rejects duplicate sessions, invalid OHLC relationships, non-positive prices and future-dated rows.
+The first fetch requires:
 
-## Why an earlier graph reached 2040
-
-The notebooks previously defaulted to a deterministic synthetic smoke-test series:
-
-```python
-synthetic_market_data(periods=600)
+```bash
+export TWELVE_DATA_API_KEY="your-key"
 ```
 
-That series begins in January 2000 and therefore extends to December 2049. It was not a forecast and was not real market data. The notebooks now default to real data; synthetic data is opt-in only.
+Later runs use the ignored local cache unless refresh is requested.
 
-## Limit-order experiment currently implemented
+## Limit-order assumptions
 
-For each trading session `t`:
+For each eligible session `t`:
 
-1. Observe the preceding close `close[t-1]`.
-2. Set a buy limit:
+```text
+limit[t] = close[t-1] × (1 - discount)
+```
 
-   ```text
-   limit = close[t-1] × (1 - discount)
-   ```
+Execution rules:
 
-3. During session `t`:
-   - if `open[t] <= limit`, fill at the opening price;
-   - otherwise, if `low[t] <= limit`, fill at the limit;
-   - otherwise remain in cash for that one-session experiment.
+1. If `open[t] <= limit[t]`, fill at the opening price.
+2. Otherwise, if `low[t] <= limit[t]`, fill at the limit.
+3. Otherwise, keep the cash lot pending and reprice from the next preceding close.
+4. When the configured waiting horizon expires, buy at that session's close.
 
-The notebook evaluates a discount grid and reports:
+The recurring model separately tracks the initial lump sum and subsequent monthly contribution lots. It compares each lot with buying at the first eligible session's open.
 
-- fill rate;
-- gap-fill rate;
-- conditional fill discount;
-- unfilled rising-session rate;
-- mean one-session value versus buying at the open.
-
-The best row is only a **candidate for this exact one-session objective and sample**. It is not yet a universal portfolio optimum.
-
-## Not yet implemented in the daily execution engine
-
-A portfolio-grade limit-order model still needs:
-
-- persistent monthly contribution lots;
-- multi-day order expiry and cancellation;
-- market-on-expiry or time-decay rules;
-- dividends and ex-dividend order treatment;
-- split handling;
-- cash yield;
-- transaction costs and spread assumptions;
-- rolling out-of-sample evaluation.
-
-Those choices materially change the optimal limit distance and must remain explicit.
+Current calculations deliberately exclude dividends, cash yield, spreads, fees, taxes, and SGD/USD effects. These omissions must be resolved before using a candidate as a live policy.
 
 ## Setup
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-python -m ipykernel install \
-  --user \
-  --name retail-portfolio-backtesting \
-  --display-name "Retail Portfolio Backtesting"
+./scripts/setup_jupyter.sh
+export TWELVE_DATA_API_KEY="your-key"
 ```
 
-Or use:
+## Run all daily research from the terminal
 
 ```bash
-./scripts/setup_jupyter.sh
+./scripts/run_daily_limit_research.sh
 ```
 
-Start Jupyter:
+Equivalent direct command:
+
+```bash
+source .venv/bin/activate
+sp500-limit-orders
+```
+
+Refresh the cached market data:
+
+```bash
+sp500-limit-orders --refresh
+```
+
+Example parameter run:
+
+```bash
+sp500-limit-orders \
+  --discount-min 0.000 \
+  --discount-max 0.030 \
+  --discount-step 0.001 \
+  --max-wait-sessions 5 \
+  --train-years 5 \
+  --test-years 1
+```
+
+Outputs:
+
+```text
+results/daily_limits/one_session_grid.csv
+results/daily_limits/recurring_grid.csv
+results/daily_limits/walk_forward.csv
+results/daily_limits/summary.json
+```
+
+## Jupyter notebooks
+
+Start JupyterLab:
 
 ```bash
 source .venv/bin/activate
 jupyter lab
 ```
 
-Select the kernel:
+Select the `Retail Portfolio Backtesting` kernel.
 
-```text
-Retail Portfolio Backtesting
-```
+All notebooks now use real daily SPY data:
 
-## Notebooks
+1. `01_strategy_comparison.ipynb` — source audit and daily dip distribution.
+2. `02_parameter_experiments.ipynb` — limit-distance and expiry grids.
+3. `03_rolling_window_analysis.ipynb` — walk-forward out-of-sample selection.
+4. `04_limit_order_research.ipynb` — candidate sensitivity and contribution-lot trace.
 
-- `01_strategy_comparison.ipynb` — real monthly Shiller strategy comparison.
-- `02_parameter_experiments.ipynb` — real monthly parameter experiments.
-- `03_rolling_window_analysis.ipynb` — provisional monthly rolling analysis.
-- `04_limit_order_research.ipynb` — real daily SPY limit-distance research.
+Notebook names are retained to avoid breaking existing links, but their contents are now daily-limit research.
 
-## CLI monthly backtesting
+## Legacy monthly allocation CLI
+
+The older monthly research remains available as a separate path:
 
 ```bash
-sp500-backtest --list-strategies
-sp500-backtest --output results
-sp500-backtest --fetch-risk-free --output results
+sp500-backtest --output results/monthly
 ```
 
-Generated monthly outputs:
-
-```text
-results/backtests.csv
-results/metrics.json
-results/comparison.html
-```
+It is not used by the notebooks and is not suitable for testing daily limit fills. Its strategy-comparison mathematics remains under audit.
 
 ## Validation
 
@@ -156,6 +133,8 @@ python -m json.tool notebooks/01_strategy_comparison.ipynb >/dev/null
 python -m json.tool notebooks/02_parameter_experiments.ipynb >/dev/null
 python -m json.tool notebooks/03_rolling_window_analysis.ipynb >/dev/null
 python -m json.tool notebooks/04_limit_order_research.ipynb >/dev/null
+bash -n scripts/setup_jupyter.sh
+bash -n scripts/run_daily_limit_research.sh
 ```
 
 No automatic GitHub Actions workflow is included.

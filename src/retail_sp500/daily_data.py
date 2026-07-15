@@ -10,6 +10,8 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 TWELVE_DATA_TIME_SERIES_URL = "https://api.twelvedata.com/time_series"
+DEFAULT_DAILY_START_DATE = "2007-06-01"
+DEFAULT_DAILY_OUTPUT_SIZE = 5_000
 _DAILY_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
@@ -53,6 +55,30 @@ def _validate_daily_ohlc(frame: pd.DataFrame, *, today: date | None = None) -> p
     return validated
 
 
+def _validate_requested_coverage(
+    frame: pd.DataFrame,
+    *,
+    start_date: str,
+    end_date: str,
+    tolerance_days: int = 10,
+) -> None:
+    requested_start = pd.Timestamp(start_date).normalize()
+    requested_end = pd.Timestamp(end_date).normalize()
+    tolerance = pd.Timedelta(days=tolerance_days)
+
+    if frame.index.min() > requested_start + tolerance:
+        raise DailyDataError(
+            "daily response begins materially after the requested start date; "
+            "the provider may have truncated the response"
+        )
+    if requested_end < pd.Timestamp.today().normalize() - tolerance:
+        if frame.index.max() < requested_end - tolerance:
+            raise DailyDataError(
+                "daily response ends materially before the requested end date; "
+                "the provider may have truncated the response"
+            )
+
+
 def parse_twelve_data_daily(
     payload: Mapping[str, object],
     *,
@@ -89,20 +115,23 @@ def fetch_twelve_data_daily(
     api_key: str,
     *,
     symbol: str = "SPY",
-    start_date: str = "2007-06-01",
+    start_date: str = DEFAULT_DAILY_START_DATE,
     end_date: str | None = None,
+    output_size: int = DEFAULT_DAILY_OUTPUT_SIZE,
     timeout_seconds: int = 30,
 ) -> pd.DataFrame:
     """Fetch a real daily OHLCV window from Twelve Data.
 
-    The default starts in mid-2007 so a SPY request remains below Twelve Data's
-    5,000-row single-request ceiling while retaining the global financial crisis.
+    The default start remains within one 5,000-row response while retaining the
+    global financial crisis. Coverage checks reject silently truncated responses.
     """
 
     if not api_key.strip():
         raise ValueError("a Twelve Data API key is required")
     if not symbol.strip():
         raise ValueError("symbol is required")
+    if not 1 <= output_size <= DEFAULT_DAILY_OUTPUT_SIZE:
+        raise ValueError("output_size must be between 1 and 5,000")
 
     effective_end = end_date or date.today().isoformat()
     query = urlencode(
@@ -111,6 +140,7 @@ def fetch_twelve_data_daily(
             "interval": "1day",
             "start_date": start_date,
             "end_date": effective_end,
+            "outputsize": output_size,
             "order": "asc",
             "timezone": "Exchange",
             "apikey": api_key,
@@ -118,7 +148,7 @@ def fetch_twelve_data_daily(
     )
     request = Request(
         f"{TWELVE_DATA_TIME_SERIES_URL}?{query}",
-        headers={"User-Agent": "retail-sp500-backtesting/0.4"},
+        headers={"User-Agent": "retail-sp500-backtesting/0.5"},
     )
     with urlopen(request, timeout=timeout_seconds) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -126,15 +156,22 @@ def fetch_twelve_data_daily(
         raise DailyDataError("Twelve Data returned a non-object response")
 
     frame = parse_twelve_data_daily(payload)
-    if len(frame) >= 5_000:
+    if len(frame) >= output_size:
         raise DailyDataError(
-            "daily response reached the 5,000-row ceiling; shorten or split the date range"
+            f"daily response reached the {output_size:,}-row ceiling; "
+            "shorten or split the date range"
         )
+    _validate_requested_coverage(
+        frame,
+        start_date=start_date,
+        end_date=effective_end,
+    )
     frame.attrs.update(
         {
             "requested_symbol": symbol.upper(),
             "requested_start_date": start_date,
             "requested_end_date": effective_end,
+            "output_size": output_size,
         }
     )
     return frame
@@ -149,11 +186,12 @@ def load_daily_csv(path: str | Path, *, today: date | None = None) -> pd.DataFra
     frame = pd.read_csv(source, parse_dates=["date"]).set_index("date")
     validated = _validate_daily_ohlc(frame, today=today)
     validated.attrs["source"] = f"CSV cache: {source}"
+    validated.attrs["interval"] = "1day"
     return validated
 
 
 def save_daily_csv(frame: pd.DataFrame, path: str | Path) -> Path:
-    """Validate and save daily OHLCV data without notebook outputs or API secrets."""
+    """Validate and save daily OHLCV data without API secrets."""
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -168,14 +206,22 @@ def load_or_fetch_twelve_data_daily(
     cache_path: str | Path,
     refresh: bool = False,
     symbol: str = "SPY",
-    start_date: str = "2007-06-01",
+    start_date: str = DEFAULT_DAILY_START_DATE,
     end_date: str | None = None,
 ) -> pd.DataFrame:
     """Use a local real-data cache when present; otherwise fetch and persist it."""
 
     cache = Path(cache_path)
     if cache.exists() and not refresh:
-        return load_daily_csv(cache)
+        frame = load_daily_csv(cache)
+        frame.attrs.update(
+            {
+                "requested_symbol": symbol.upper(),
+                "requested_start_date": start_date,
+                "requested_end_date": end_date or date.today().isoformat(),
+            }
+        )
+        return frame
     if api_key is None or not api_key.strip():
         raise ValueError(
             "TWELVE_DATA_API_KEY is required when the daily cache is absent or refresh=True"
@@ -188,3 +234,17 @@ def load_or_fetch_twelve_data_daily(
     )
     save_daily_csv(frame, cache)
     return frame
+
+
+def daily_data_summary(frame: pd.DataFrame, *, symbol: str = "SPY") -> dict[str, object]:
+    """Return explicit source and date metadata for notebooks and scripts."""
+
+    validated = _validate_daily_ohlc(frame)
+    return {
+        "source": frame.attrs.get("source", "validated daily OHLCV"),
+        "symbol": frame.attrs.get("symbol") or frame.attrs.get("requested_symbol") or symbol,
+        "interval": frame.attrs.get("interval", "1day"),
+        "start": validated.index.min().date().isoformat(),
+        "end": validated.index.max().date().isoformat(),
+        "sessions": int(len(validated)),
+    }

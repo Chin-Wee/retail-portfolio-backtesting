@@ -21,4 +21,20 @@ python -m ipykernel install \
   --name retail-portfolio-backtesting \
   --display-name "Retail Portfolio Backtesting"
 
-printf '\nSetup complete. Start Jupyter with:\n  source .venv/bin/activate\n  jupyter lab\n'
+mkdir -p data/processed results/daily_limits
+
+cat <<'EOF'
+
+Setup complete.
+
+Real daily research requires a Twelve Data API key on the first fetch:
+  export TWELVE_DATA_API_KEY="your-key"
+
+Run the reproducible command-line research:
+  source .venv/bin/activate
+  sp500-limit-orders
+
+Or open the notebooks:
+  source .venv/bin/activate
+  jupyter lab
+EOF

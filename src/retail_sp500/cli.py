@@ -16,7 +16,12 @@ from .strategies import select_strategies, strategy_catalog
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run monthly S&P 500 strategy backtests")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the legacy monthly S&P 500 allocation backtest. "
+            "Use sp500-limit-orders for real daily limit-order research."
+        )
+    )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--data", type=Path, help="Local Shiller XLS/XLSX/CSV file")
     source.add_argument("--synthetic", action="store_true", help="Use deterministic demo data")
@@ -37,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--live-quote", action="store_true", help="Print a current Twelve Data quote and exit")
     parser.add_argument("--live-symbol", default="SPY")
     parser.add_argument("--twelve-data-api-key", default=os.getenv("TWELVE_DATA_API_KEY"))
-    parser.add_argument("--output", type=Path, default=Path("results"))
+    parser.add_argument("--output", type=Path, default=Path("results/monthly"))
     parser.add_argument("--initial-cash", type=float, default=100_000.0)
     parser.add_argument("--monthly-contribution", type=float, default=1_000.0)
     parser.add_argument("--cash-annual-return", type=float, default=0.0)
@@ -64,6 +69,12 @@ def main() -> None:
         quote = fetch_twelve_data_quote(args.twelve_data_api_key, args.live_symbol)
         print(json.dumps(quote.to_dict(), indent=2))
         return
+
+    print(
+        "Monthly Shiller path: unsuitable for daily limit-order fills. "
+        "Use `sp500-limit-orders` for the real daily workflow.",
+        file=sys.stderr,
+    )
 
     market = synthetic_market_data() if args.synthetic else load_shiller_data(args.data)
     if args.risk_free_data is not None:
@@ -108,7 +119,7 @@ def main() -> None:
     (args.output / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     comparison_figure(results).write_html(args.output / "comparison.html", include_plotlyjs="cdn")
 
-    print(f"Wrote {len(results)} strategies to {args.output}")
+    print(f"Wrote {len(results)} monthly strategies to {args.output}")
 
 
 if __name__ == "__main__":

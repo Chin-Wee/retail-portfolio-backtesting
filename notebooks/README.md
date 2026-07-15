@@ -1,34 +1,26 @@
-# Notebooks
+# Daily research notebooks
 
-These notebooks are deliberately thin. Reusable market-data, strategy, portfolio-accounting and plotting logic belongs in `src/retail_sp500/`; notebooks select inputs, run experiments and display results.
+The notebooks are thin orchestration layers over `src/retail_sp500/`. Reusable fetching, validation, fill simulation, recurring-cash accounting, and walk-forward logic belongs in Python modules.
+
+All four notebooks use real Twelve Data `1day` SPY OHLCV data. They contain no synthetic default and do not import the monthly Shiller strategy engine.
 
 ## Files
 
-- `01_strategy_comparison.ipynb` — real monthly Shiller strategy comparison; synthetic data is opt-in only.
-- `02_parameter_experiments.ipynb` — real monthly parameter experiments.
-- `03_rolling_window_analysis.ipynb` — real monthly rolling analysis, explicitly marked provisional until warm-up semantics are repaired.
-- `04_limit_order_research.ipynb` — real SPY daily OHLCV and fixed-discount next-session limit-order experiments.
+- `01_strategy_comparison.ipynb` — audit source dates and describe how far daily lows trade below the preceding close.
+- `02_parameter_experiments.ipynb` — compare discount grids and 1/3/5/10/20-session expiry horizons.
+- `03_rolling_window_analysis.ipynb` — train on trailing windows and score the selected discount on unseen years.
+- `04_limit_order_research.ipynb` — derive a candidate from walk-forward selections and inspect contribution-lot execution.
 
-## Real daily data
+## First run
 
-The limit-order notebook reads `TWELVE_DATA_API_KEY` and caches validated data at:
-
-```text
-data/processed/spy_daily_1day.csv
+```bash
+export TWELVE_DATA_API_KEY="your-key"
+source .venv/bin/activate
+jupyter lab
 ```
 
-The cache is ignored by Git. The notebook reports the source, first session, last session and row count, and rejects future-dated data.
-
-## Kernel
-
-All committed notebooks target the kernel:
-
-```text
-Retail Portfolio Backtesting
-```
-
-Register it with `scripts/setup_jupyter.sh` or the commands in the root README.
+The validated cache is stored at `data/processed/spy_daily_1day.csv` and ignored by Git.
 
 ## Commit policy
 
-Notebook outputs and execution counts should be cleared before committing. The test suite enforces output-free notebooks to keep diffs reviewable.
+Notebook outputs and execution counts must remain cleared. The test suite also rejects monthly and synthetic imports inside the notebook suite.

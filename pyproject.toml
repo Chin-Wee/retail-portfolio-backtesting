@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retail-sp500-backtesting"
-version = "0.4.0"
-description = "Auditable S&P 500 allocation and daily limit-order research"
+version = "0.5.0"
+description = "Auditable real-daily SPY limit-order and legacy monthly allocation research"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 sp500-backtest = "retail_sp500.cli:main"
+sp500-limit-orders = "retail_sp500.limit_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

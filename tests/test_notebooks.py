@@ -36,18 +36,40 @@ def test_committed_notebooks_are_thin_and_output_free() -> None:
         assert any("retail_sp500" in source for source in sources)
 
 
-def test_research_notebooks_do_not_default_to_synthetic_data() -> None:
-    for filename in NOTEBOOKS[:3]:
+def test_every_notebook_uses_real_daily_data_only() -> None:
+    forbidden = (
+        "synthetic_market_data",
+        "load_shiller_data",
+        "BacktestConfig",
+        "USE_SYNTHETIC",
+    )
+    for filename in NOTEBOOKS:
         notebook = json.loads((ROOT / "notebooks" / filename).read_text(encoding="utf-8"))
         sources = "\n".join(_code_sources(notebook))
-        assert "USE_SYNTHETIC = False" in sources
+        assert "load_or_fetch_twelve_data_daily" in sources
+        assert "TWELVE_DATA_API_KEY" in sources
+        for token in forbidden:
+            assert token not in sources
 
 
-def test_limit_order_notebook_uses_real_daily_path() -> None:
-    notebook = json.loads(
-        (ROOT / "notebooks" / "04_limit_order_research.ipynb").read_text(encoding="utf-8")
-    )
-    sources = "\n".join(_code_sources(notebook))
-    assert "load_or_fetch_twelve_data_daily" in sources
-    assert "evaluate_limit_discount_grid" in sources
-    assert "synthetic_market_data" not in sources
+def test_notebooks_cover_daily_audit_grid_walk_forward_and_lots() -> None:
+    combined = {
+        filename: "\n".join(
+            _code_sources(
+                json.loads((ROOT / "notebooks" / filename).read_text(encoding="utf-8"))
+            )
+        )
+        for filename in NOTEBOOKS
+    }
+    assert "intraday_low_from_previous_close" in combined[NOTEBOOKS[0]]
+    assert "evaluate_recurring_limit_grid" in combined[NOTEBOOKS[1]]
+    assert "walk_forward_recurring_limit_selection" in combined[NOTEBOOKS[2]]
+    assert "simulate_recurring_limit_strategy" in combined[NOTEBOOKS[3]]
+
+
+def test_shell_scripts_reference_daily_workflow() -> None:
+    setup = (ROOT / "scripts" / "setup_jupyter.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "run_daily_limit_research.sh").read_text(encoding="utf-8")
+    assert "TWELVE_DATA_API_KEY" in setup
+    assert "sp500-limit-orders" in setup
+    assert "sp500-limit-orders" in runner
