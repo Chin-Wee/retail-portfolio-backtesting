@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,8 +9,11 @@ import pytest
 from retail_sp500.limit_orders import evaluate_limit_discount_grid, one_session_limit_outcomes
 from retail_sp500.limit_portfolio import (
     RecurringLimitConfig,
+    build_recurring_limit_equity_curve,
+    compare_recurring_limit_strategies,
     evaluate_recurring_limit_grid,
     simulate_recurring_limit_strategy,
+    summarize_recurring_limit_risk,
     walk_forward_recurring_limit_selection,
 )
 
@@ -59,12 +64,7 @@ def test_grid_reports_fill_tradeoff() -> None:
 def test_recurring_limit_tracks_lump_sum_separately() -> None:
     lots = simulate_recurring_limit_strategy(
         _daily(),
-        RecurringLimitConfig(
-            discount=0.01,
-            max_wait_sessions=2,
-            initial_cash=100.0,
-            monthly_contribution=0.0,
-        ),
+        RecurringLimitConfig(discount=0.01, max_wait_sessions=2, initial_cash=100.0, monthly_contribution=0.0),
     )
     assert len(lots) == 1
     assert lots.iloc[0]["fill_type"] == "touch"
@@ -73,7 +73,7 @@ def test_recurring_limit_tracks_lump_sum_separately() -> None:
     assert lots.iloc[0]["ending_excess_value"] > 0.0
 
 
-def test_recurring_grid_reports_forced_execution() -> None:
+def test_recurring_grid_reports_forced_execution_and_risk_metrics() -> None:
     summary = evaluate_recurring_limit_grid(
         _daily(),
         [0.01, 0.20],
@@ -84,20 +84,32 @@ def test_recurring_grid_reports_forced_execution() -> None:
     deep = summary.loc[summary["discount"] == 0.20].iloc[0]
     assert deep["forced_fill_rate"] == pytest.approx(1.0)
     assert deep["average_wait_sessions"] == pytest.approx(2.0)
+    assert {"annualized_return", "max_drawdown", "calmar_ratio"}.issubset(summary.columns)
 
 
-def test_walk_forward_uses_unseen_test_windows() -> None:
+def test_contributions_do_not_create_artificial_returns_or_hide_drawdown() -> None:
+    index = pd.date_range("2024-01-02", "2024-03-15", freq="B")
+    close = np.full(len(index), 100.0)
+    daily = pd.DataFrame({"open": close, "high": close, "low": close, "close": close}, index=index)
+    lots = simulate_recurring_limit_strategy(
+        daily,
+        RecurringLimitConfig(discount=0.10, max_wait_sessions=2, initial_cash=100.0, monthly_contribution=100.0),
+    )
+    curve = build_recurring_limit_equity_curve(daily, lots)
+    assert curve["strategy_return"].abs().max() == pytest.approx(0.0)
+    assert curve["baseline_return"].abs().max() == pytest.approx(0.0)
+    metrics = summarize_recurring_limit_risk(curve)
+    assert metrics["max_drawdown"] == pytest.approx(0.0)
+    assert math.isnan(float(metrics["calmar_ratio"]))
+
+
+def test_walk_forward_uses_unseen_test_windows_and_calmar_selection() -> None:
     index = pd.date_range("2010-01-01", "2020-12-31", freq="B")
     base = 100.0 * np.exp(np.linspace(0.0, 1.0, len(index)))
     wave = 1.0 + 0.01 * np.sin(np.arange(len(index)) / 5.0)
     close = base * wave
     daily = pd.DataFrame(
-        {
-            "open": close * 1.001,
-            "high": close * 1.01,
-            "low": close * 0.99,
-            "close": close,
-        },
+        {"open": close * 1.001, "high": close * 1.01, "low": close * 0.99, "close": close},
         index=index,
     )
     result = walk_forward_recurring_limit_selection(
@@ -107,7 +119,33 @@ def test_walk_forward_uses_unseen_test_windows() -> None:
         test_years=1,
         max_wait_sessions=3,
         monthly_contribution=100.0,
+        selection_metric="calmar_ratio",
     )
     assert not result.empty
     assert (result["test_start"] > result["train_end"]).all()
     assert result["selected_discount"].isin([0.0, 0.005, 0.01]).all()
+    assert (result["selection_metric"] == "calmar_ratio").all()
+    assert {"test_calmar_ratio", "test_max_drawdown", "test_annualized_return"}.issubset(result.columns)
+
+
+def test_named_strategy_comparison_includes_immediate_open_baseline() -> None:
+    strategies = {
+        "Shallow": RecurringLimitConfig(0.01, 2, 100.0, 0.0),
+        "Deep": RecurringLimitConfig(0.20, 2, 100.0, 0.0),
+    }
+    metrics, curves = compare_recurring_limit_strategies(_daily(), strategies)
+    assert metrics["strategy"].tolist()[0] == "Immediate open"
+    assert set(metrics["strategy"]) == {"Immediate open", "Shallow", "Deep"}
+    assert set(curves["strategy"]) == {"Immediate open", "Shallow", "Deep"}
+    assert {"annualized_return", "max_drawdown", "calmar_ratio"}.issubset(metrics.columns)
+
+
+def test_named_strategy_comparison_rejects_different_cash_flows() -> None:
+    with pytest.raises(ValueError, match="cash-flow"):
+        compare_recurring_limit_strategies(
+            _daily(),
+            {
+                "A": RecurringLimitConfig(0.01, 2, 100.0, 0.0),
+                "B": RecurringLimitConfig(0.02, 2, 200.0, 0.0),
+            },
+        )

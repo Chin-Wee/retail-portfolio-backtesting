@@ -9,9 +9,13 @@ fi
 source .venv/bin/activate
 
 CACHE_PATH="${CACHE_PATH:-data/processed/spy_daily_1day.csv}"
+SELECTION_METRIC="${SELECTION_METRIC:-calmar_ratio}"
 if [[ ! -f "$CACHE_PATH" && -z "${TWELVE_DATA_API_KEY:-}" ]]; then
   echo "Set TWELVE_DATA_API_KEY for the first daily-data fetch." >&2
   exit 1
 fi
 
-exec sp500-limit-orders --cache "$CACHE_PATH" "$@"
+exec sp500-limit-orders \
+  --cache "$CACHE_PATH" \
+  --selection-metric "$SELECTION_METRIC" \
+  "$@"

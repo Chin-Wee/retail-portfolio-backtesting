@@ -30,11 +30,14 @@ Setup complete.
 Real daily research requires a Twelve Data API key on the first fetch:
   export TWELVE_DATA_API_KEY="your-key"
 
-Run the reproducible command-line research:
+Run the reproducible command-line research with Calmar walk-forward selection:
   source .venv/bin/activate
-  sp500-limit-orders
+  ./scripts/run_daily_limit_research.sh  # runs sp500-limit-orders
 
-Or open the notebooks:
+Open the graph notebooks:
   source .venv/bin/activate
   jupyter lab
+
+Dedicated Calmar notebook:
+  notebooks/05_calmar_ratio_exploration.ipynb
 EOF
