@@ -18,26 +18,18 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 python -m ipykernel install \
   --user \
-  --name retail-portfolio-backtesting \
-  --display-name "Retail Portfolio Backtesting"
-
-mkdir -p data/processed results/daily_limits
+  --name retail-portfolio \
+  --display-name "Retail Portfolio Lab"
+mkdir -p data results/portfolio
 
 cat <<'EOF'
-
 Setup complete.
 
-Real daily research requires a Twelve Data API key on the first fetch:
+First live-data run:
   export TWELVE_DATA_API_KEY="your-key"
-
-Run the reproducible command-line research with Calmar walk-forward selection:
-  source .venv/bin/activate
-  ./scripts/run_daily_limit_research.sh  # runs sp500-limit-orders
-
-Open the graph notebooks:
   source .venv/bin/activate
   jupyter lab
 
-Dedicated Calmar notebook:
-  notebooks/05_calmar_ratio_exploration.ipynb
+Terminal equivalent:
+  ./scripts/run.sh
 EOF

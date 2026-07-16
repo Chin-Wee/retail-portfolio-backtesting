@@ -4,16 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retail-sp500-backtesting"
-version = "0.6.0"
-description = "Auditable real-daily SPY limit-order, Calmar, and legacy allocation research"
+version = "1.0.0"
+description = "One-notebook retail portfolio strategy comparison and stacking lab"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
   "pandas>=2.1",
   "plotly>=5.18",
-  "xlrd>=2.0.1",
-  "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-sp500-backtest = "retail_sp500.cli:main"
-sp500-limit-orders = "retail_sp500.limit_cli:main"
+retail-portfolio = "retail_sp500.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,196 +1,136 @@
-# Retail SPY Limit-Order Research
+# Retail Portfolio Lab
 
-An auditable research workspace for finding practical SPY buy-limit distances using **real daily OHLCV data**, recurring contribution lots, walk-forward testing, drawdown analysis, and Calmar ratio exploration.
+One research notebook for one question:
 
-The repository retains the older monthly S&P 500 allocation engine, but every Jupyter notebook uses the real daily path. Monthly averages cannot establish whether a daily limit order filled.
+> Given monthly investable cash, real daily market data, and automation, which purchase policies are robust enough to use together?
 
-## Calmar ratio
+The repository compares every strategy on the same SPY history and cash-flow schedule, reserves the latest years as an untouched holdout, then builds a small strategy stack using only the earlier selection period.
 
-The daily workflow calculates:
+It does **not** claim to discover a permanently perfect portfolio. It creates an auditable candidate that can be rerun as new live data arrives.
 
-```text
-Calmar ratio = annualized compounded return / |maximum drawdown|
-```
-
-Returns come from a **contribution-neutral daily wealth index**. Deposits are removed from the return calculation before compounding, so a new contribution cannot hide a portfolio drawdown.
-
-A path with no observed drawdown has an undefined Calmar ratio and is reported as `NaN`, not infinity.
-
-The immediate-open baseline is calculated with the same contributions and dates, allowing direct comparisons of:
-
-- annualized compounded return;
-- maximum drawdown;
-- Calmar ratio;
-- terminal excess value;
-- fill and forced-execution rates.
-
-## Data source
-
-The daily workflow uses Twelve Data's official `1day` SPY OHLCV endpoint.
-
-Default window:
+## What remains
 
 ```text
-2007-06-01 through the latest available trading session
+notebooks/retail_portfolio.ipynb   single research interface
+src/retail_sp500/data.py           live Twelve Data loader and cache
+src/retail_sp500/models.py         strategy definitions and adaptive limit signals
+src/retail_sp500/engine.py         common backtest and contribution accounting
+src/retail_sp500/stacking.py       selection, stacking, charts, and exports
+src/retail_sp500/research.py       small public facade imported by the notebook
+src/retail_sp500/cli.py            automated terminal runner
 ```
 
-The request explicitly asks for 5,000 rows, validates OHLC relationships, rejects duplicate and future-dated sessions, checks for likely truncation, and caches the result at:
+The older monthly Shiller engine, duplicate limit-order modules, five separate notebooks, and committed market-data snapshot have been removed.
 
-```text
-data/processed/spy_daily_1day.csv
-```
+## Strategies compared
 
-The first fetch requires:
+- immediate purchase at the first eligible open;
+- fixed pullback limits from 0.25% to 2.00%;
+- volatility-scaled limits based on trailing ATR;
+- leak-free historical fill-probability limits targeting 80%, 90%, or 95% execution;
+- 5-, 10-, and 20-session maximum waits, always capped at the final trading session of the contribution month;
+- market-on-close fallback at expiry so missed orders are not ignored.
 
-```bash
-export TWELVE_DATA_API_KEY="your-key"
-```
+Every strategy receives the same initial cash and monthly contributions.
 
-Later runs use the ignored local cache unless refresh is requested.
+## Selection and stacking
 
-## Limit-order assumptions
+1. All strategies are run over the common history where every strategy has valid inputs.
+2. The most recent four years are reserved as an untouched holdout by default.
+3. The earlier period marks strategies worth further testing when they improve Calmar without materially sacrificing annualized return.
+4. A greedy stack begins with immediate investment and adds only strategies that improve selection-period Calmar.
+5. The notebook then shows the untouched holdout results for the final stack.
 
-For each eligible session `t`:
-
-```text
-limit[t] = close[t-1] × (1 - discount)
-```
-
-Execution rules:
-
-1. If `open[t] <= limit[t]`, fill at the opening price.
-2. Otherwise, if `low[t] <= limit[t]`, fill at the limit.
-3. Otherwise, keep the cash lot pending and reprice from the next preceding close.
-4. When the waiting horizon expires, buy at that session's close.
-
-The recurring model separately tracks the initial lump sum and subsequent monthly contribution lots. It compares each lot with buying at the first eligible session's open.
-
-Current calculations deliberately exclude dividends, cash yield, spreads, fees, taxes, and SGD/USD effects. These omissions affect both return and Calmar results and must be resolved before treating a candidate as a live policy.
+The final stack represents separate automated subaccounts: each monthly contribution is divided by the selected weights. It is not leverage and does not short the market.
 
 ## Setup
 
 ```bash
-./scripts/setup_jupyter.sh
+./scripts/setup.sh
 export TWELVE_DATA_API_KEY="your-key"
-```
-
-## Run the daily research and graphs
-
-```bash
-./scripts/run_daily_limit_research.sh
-```
-
-The runner defaults walk-forward selection to Calmar ratio. Override it with:
-
-```bash
-SELECTION_METRIC=ending_excess_value ./scripts/run_daily_limit_research.sh
-```
-
-Equivalent direct command:
-
-```bash
-source .venv/bin/activate
-sp500-limit-orders --selection-metric calmar_ratio
-```
-
-Example parameter run:
-
-```bash
-sp500-limit-orders \
-  --discount-min 0.000 \
-  --discount-max 0.030 \
-  --discount-step 0.001 \
-  --max-wait-sessions 5 \
-  --train-years 5 \
-  --test-years 1 \
-  --selection-metric calmar_ratio
-```
-
-## Generated data and graphs
-
-```text
-results/daily_limits/one_session_grid.csv
-results/daily_limits/strategy_grid.csv
-results/daily_limits/strategy_comparison_metrics.csv
-results/daily_limits/strategy_comparison_curves.csv
-results/daily_limits/walk_forward.csv
-results/daily_limits/calmar_candidate_lots.csv
-results/daily_limits/calmar_candidate_equity_curve.csv
-results/daily_limits/summary.json
-
-results/daily_limits/calmar_by_discount.html
-results/daily_limits/return_vs_drawdown.html
-results/daily_limits/calmar_candidate_wealth.html
-results/daily_limits/calmar_candidate_drawdown.html
-results/daily_limits/strategy_calmar_ranking.html
-results/daily_limits/strategy_return_vs_drawdown.html
-results/daily_limits/strategy_wealth_comparison.html
-results/daily_limits/strategy_drawdown_comparison.html
-results/daily_limits/walk_forward_selected_discount.html
-results/daily_limits/walk_forward_test_calmar.html
-```
-
-Open the graphs on macOS:
-
-```bash
-open results/daily_limits/calmar_by_discount.html
-open results/daily_limits/return_vs_drawdown.html
-open results/daily_limits/calmar_candidate_wealth.html
-open results/daily_limits/calmar_candidate_drawdown.html
-open results/daily_limits/strategy_calmar_ranking.html
-open results/daily_limits/strategy_return_vs_drawdown.html
-open results/daily_limits/strategy_wealth_comparison.html
-open results/daily_limits/strategy_drawdown_comparison.html
-open results/daily_limits/walk_forward_selected_discount.html
-open results/daily_limits/walk_forward_test_calmar.html
-```
-
-## Jupyter notebooks
-
-```bash
 source .venv/bin/activate
 jupyter lab
 ```
 
-Select the `Retail Portfolio Backtesting` kernel.
+Open:
 
-1. `01_strategy_comparison.ipynb` — real daily source audit and downside-excursion graphs.
-2. `02_parameter_experiments.ipynb` — limit-distance, expiry, Calmar, return, and drawdown graphs.
-3. `03_rolling_window_analysis.ipynb` — Calmar-selected walk-forward graphs on unseen years.
-4. `04_limit_order_research.ipynb` — final charts comparing immediate investment, fixed pullbacks, terminal-value winners, Calmar winners, and the walk-forward candidate.
-5. `05_calmar_ratio_exploration.ipynb` — dedicated Calmar sensitivity and top-strategy chart exploration.
-
-## Final strategy dashboard
-
-The main visual output is `notebooks/04_limit_order_research.ipynb` and the four matching HTML files:
-
-- Calmar ranking across named investment strategies;
-- annualized return versus maximum drawdown;
-- contribution-neutral wealth paths;
-- drawdown paths through time.
-
-The compared strategies include immediate investment, simple fixed pullback rules, the full-sample terminal-value winner, the full-sample Calmar winner, and the median walk-forward candidate. Full-sample winners are labelled as in-sample research results.
-
-## Legacy monthly allocation CLI
-
-```bash
-sp500-backtest --output results/monthly
+```text
+notebooks/retail_portfolio.ipynb
 ```
 
-It is not used by the notebooks and is not suitable for testing daily limit fills. Its strategy-comparison mathematics remains under audit.
+Select the `Retail Portfolio Lab` kernel.
+
+The first run downloads validated SPY daily OHLCV data to:
+
+```text
+data/spy_daily.csv
+```
+
+Later runs use the cache unless `REFRESH = True` is set in the notebook.
+
+## Notebook workflow
+
+Run the notebook through the selection-period comparison, then stop at the approval cell. The holdout is not displayed until after you choose one of two stacking modes:
+
+```python
+APPROVED_STRATEGIES = None
+```
+
+Uses the automatic pre-holdout filter.
+
+```python
+APPROVED_STRATEGIES = [
+    "fixed-0.0050-10",
+    "fill-0.90-20",
+]
+```
+
+Restricts the stack to strategies you explicitly approve after reviewing the charts.
+
+## Terminal automation
+
+```bash
+./scripts/run.sh
+```
+
+Restrict the stack from the command line:
+
+```bash
+./scripts/run.sh \
+  --approve fixed-0.0050-10 \
+  --approve fill-0.90-20
+```
+
+Outputs:
+
+```text
+results/portfolio/strategy_metrics.csv
+results/portfolio/strategy_curves.csv
+results/portfolio/stack_weights.csv
+results/portfolio/stack_curve.csv
+results/portfolio/stack_metrics.json
+results/portfolio/*.html
+```
+
+## Main charts
+
+- selection versus holdout Calmar ranking;
+- holdout return versus drawdown;
+- fill reliability versus execution savings;
+- contribution-neutral wealth paths;
+- drawdown paths;
+- final stack weights.
+
+## Current omissions
+
+The model excludes dividends, idle-cash yield, spreads, fees, taxes, FX costs, and partial fills. These can matter more than small differences between execution strategies and must be added before live deployment.
 
 ## Validation
 
 ```bash
 python -m pytest -q
 python -m compileall -q src
-python -m json.tool notebooks/01_strategy_comparison.ipynb >/dev/null
-python -m json.tool notebooks/02_parameter_experiments.ipynb >/dev/null
-python -m json.tool notebooks/03_rolling_window_analysis.ipynb >/dev/null
-python -m json.tool notebooks/04_limit_order_research.ipynb >/dev/null
-python -m json.tool notebooks/05_calmar_ratio_exploration.ipynb >/dev/null
-bash -n scripts/setup_jupyter.sh
-bash -n scripts/run_daily_limit_research.sh
+python -m json.tool notebooks/retail_portfolio.ipynb >/dev/null
+bash -n scripts/setup.sh
+bash -n scripts/run.sh
 ```
-
-No automatic GitHub Actions workflow is included.

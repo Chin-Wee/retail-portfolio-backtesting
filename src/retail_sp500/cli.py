@@ -4,122 +4,78 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sys
 
-import pandas as pd
-
-from .backtest import BacktestConfig, run_many
-from .data import enrich_with_risk_free_rate, load_shiller_data, synthetic_market_data
-from .live import fetch_twelve_data_quote
-from .plotting import comparison_figure
-from .strategies import select_strategies, strategy_catalog
+from .data import DEFAULT_START_DATE, load_market, market_summary
+from .research import LabConfig, build_stack, compare_strategies, export_results
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run the legacy monthly S&P 500 allocation backtest. "
-            "Use sp500-limit-orders for real daily limit-order research."
-        )
+        description="Compare automated monthly SPY purchase strategies and build a robust stack"
     )
-    source = parser.add_mutually_exclusive_group()
-    source.add_argument("--data", type=Path, help="Local Shiller XLS/XLSX/CSV file")
-    source.add_argument("--synthetic", action="store_true", help="Use deterministic demo data")
-    parser.add_argument("--risk-free-data", type=Path, help="Local FRED TB3MS CSV file")
-    parser.add_argument(
-        "--fetch-risk-free",
-        action="store_true",
-        help="Download FRED TB3MS and enable risk-free-dependent strategies",
-    )
-    parser.add_argument(
-        "--strategy",
-        action="append",
-        dest="strategies",
-        metavar="KEY",
-        help="Run one strategy key; repeat to compare several. Defaults to all available.",
-    )
-    parser.add_argument("--list-strategies", action="store_true")
-    parser.add_argument("--live-quote", action="store_true", help="Print a current Twelve Data quote and exit")
-    parser.add_argument("--live-symbol", default="SPY")
-    parser.add_argument("--twelve-data-api-key", default=os.getenv("TWELVE_DATA_API_KEY"))
-    parser.add_argument("--output", type=Path, default=Path("results/monthly"))
+    parser.add_argument("--symbol", default="SPY")
+    parser.add_argument("--start-date", default=DEFAULT_START_DATE)
+    parser.add_argument("--end-date")
+    parser.add_argument("--cache", type=Path, default=Path("data/spy_daily.csv"))
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--api-key", default=os.getenv("TWELVE_DATA_API_KEY"))
+    parser.add_argument("--output", type=Path, default=Path("results/portfolio"))
     parser.add_argument("--initial-cash", type=float, default=100_000.0)
     parser.add_argument("--monthly-contribution", type=float, default=1_000.0)
-    parser.add_argument("--cash-annual-return", type=float, default=0.0)
+    parser.add_argument("--salary-day", type=int, default=1)
+    parser.add_argument("--holdout-years", type=int, default=4)
+    parser.add_argument("--max-stack-components", type=int, default=4)
+    parser.add_argument(
+        "--approve",
+        action="append",
+        dest="approved",
+        metavar="STRATEGY_KEY",
+        help="Restrict stacking to an approved strategy key; repeat as needed",
+    )
     return parser
 
 
-def _print_strategy_catalog() -> None:
-    for definition in strategy_catalog().values():
-        requirements = ", ".join(definition.required_columns)
-        print(f"{definition.key:22} requires [{requirements}]  {definition.description}")
-
-
 def main() -> None:
-    parser = _parser()
-    args = parser.parse_args()
-
-    if args.list_strategies:
-        _print_strategy_catalog()
-        return
-
-    if args.live_quote:
-        if not args.twelve_data_api_key:
-            parser.error("--live-quote requires --twelve-data-api-key or TWELVE_DATA_API_KEY")
-        quote = fetch_twelve_data_quote(args.twelve_data_api_key, args.live_symbol)
-        print(json.dumps(quote.to_dict(), indent=2))
-        return
-
-    print(
-        "Monthly Shiller path: unsuitable for daily limit-order fills. "
-        "Use `sp500-limit-orders` for the real daily workflow.",
-        file=sys.stderr,
-    )
-
-    market = synthetic_market_data() if args.synthetic else load_shiller_data(args.data)
-    if args.risk_free_data is not None:
-        market = enrich_with_risk_free_rate(market, args.risk_free_data)
-    elif args.fetch_risk_free:
-        market = enrich_with_risk_free_rate(market)
-
-    explicit_selection = args.strategies is not None
-    try:
-        strategies, skipped = select_strategies(
-            args.strategies,
-            market,
-            skip_unavailable=not explicit_selection,
-        )
-    except KeyError as error:
-        parser.error(str(error))
-
-    if not strategies:
-        parser.error("no selected strategy is supported by the loaded dataset")
-    for key, missing in skipped.items():
-        print(
-            f"Skipping {key}: missing {', '.join(missing)}. Add the required data source to enable it.",
-            file=sys.stderr,
-        )
-
-    config = BacktestConfig(
+    args = _parser().parse_args()
+    config = LabConfig(
         initial_cash=args.initial_cash,
         monthly_contribution=args.monthly_contribution,
-        cash_annual_return=args.cash_annual_return,
+        salary_day=args.salary_day,
+        holdout_years=args.holdout_years,
+        stack_max_components=args.max_stack_components,
     )
-    results = run_many(market, strategies, config)
+    daily = load_market(
+        args.api_key,
+        cache_path=args.cache,
+        refresh=args.refresh,
+        symbol=args.symbol,
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
+    comparison = compare_strategies(daily, config=config)
+    stack = build_stack(
+        comparison,
+        config=config,
+        approved_strategies=args.approved,
+    )
+    output = export_results(comparison, stack, output_dir=args.output)
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    histories = []
-    for name, result in results.items():
-        history = result.history.copy()
-        history.insert(0, "strategy", name)
-        histories.append(history.reset_index())
-    pd.concat(histories, ignore_index=True).to_csv(args.output / "backtests.csv", index=False)
-
-    metrics = {name: result.metrics for name, result in results.items()}
-    (args.output / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    comparison_figure(results).write_html(args.output / "comparison.html", include_plotlyjs="cdn")
-
-    print(f"Wrote {len(results)} monthly strategies to {args.output}")
+    ranking_columns = [
+        "key",
+        "strategy",
+        "selection_calmar_ratio",
+        "holdout_calmar_ratio",
+        "holdout_annualized_return",
+        "holdout_max_drawdown",
+        "worth_testing",
+    ]
+    print(json.dumps(market_summary(daily, symbol=args.symbol), indent=2))
+    print(comparison.metrics[ranking_columns].head(15).to_string(index=False))
+    print("\nStack weights:")
+    print(stack.weights.to_string())
+    print("\nStack metrics:")
+    print(json.dumps(stack.metrics, indent=2, default=float))
+    print(f"\nWrote results and charts to {output}")
 
 
 if __name__ == "__main__":
