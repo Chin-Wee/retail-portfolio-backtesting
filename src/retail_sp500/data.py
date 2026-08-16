@@ -68,6 +68,8 @@ def parse_twelve_data(payload: Mapping[str, object], *, today: date | None = Non
     index = pd.to_datetime(frame.pop("datetime"), errors="coerce")
     if index.isna().any():
         raise MarketDataError("Twelve Data response contains an invalid datetime")
+    if "volume" not in frame.columns:
+        frame["volume"] = 0.0
     frame.index = pd.DatetimeIndex(index)
     validated = validate_daily(frame, today=today)
 
