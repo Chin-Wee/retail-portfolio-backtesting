@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 TWELVE_DATA_URL = "https://api.twelvedata.com/time_series"
-DEFAULT_START_DATE = "2007-06-01"
+DEFAULT_START_DATE = "2008-01-01"
 MAX_OUTPUT_SIZE = 5_000
 _REQUIRED = ("open", "high", "low", "close", "volume")
 
