@@ -98,6 +98,7 @@ def fetch_daily(
             "outputsize": MAX_OUTPUT_SIZE,
             "order": "asc",
             "timezone": "Exchange",
+            "adjust": "all",
             "apikey": api_key,
         }
     )
@@ -120,6 +121,7 @@ def fetch_daily(
             "requested_symbol": symbol.upper(),
             "requested_start_date": start_date,
             "requested_end_date": effective_end,
+            "adjust": "all",
         }
     )
     return frame
