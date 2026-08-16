@@ -67,6 +67,30 @@ def _trade_sessions(
     return sessions
 
 
+def _end_session(
+    index: pd.DatetimeIndex,
+    *,
+    first_session: pd.Timestamp,
+    evaluation_years: int,
+    evaluation_end: pd.Timestamp | None,
+) -> pd.Timestamp:
+    if evaluation_end is None:
+        target_end = first_session + pd.DateOffset(years=evaluation_years)
+        if pd.Timestamp(index[-1]) < target_end:
+            raise ValueError("historical window is shorter than the requested evaluation horizon")
+    else:
+        target_end = pd.Timestamp(evaluation_end)
+        if target_end < first_session:
+            raise ValueError("evaluation_end cannot precede the first buy session")
+        if target_end > pd.Timestamp(index[-1]):
+            raise ValueError("evaluation_end is after the available market history")
+
+    eligible = index[(index >= first_session) & (index <= target_end)]
+    if len(eligible) == 0:
+        raise ValueError("evaluation window contains no sessions")
+    return pd.Timestamp(eligible[-1])
+
+
 def run_dca_window(
     asset_daily: pd.DataFrame,
     *,
@@ -75,8 +99,10 @@ def run_dca_window(
     config: DcaConfig,
     broker: BrokerFeeConfig,
     fx_daily: pd.DataFrame | None = None,
+    evaluation_end: pd.Timestamp | None = None,
+    cash_start: pd.Timestamp | None = None,
 ) -> dict[str, object]:
-    """Run one capital-deployment strategy over one historical start window."""
+    """Run one capital-deployment strategy over one complete historical window."""
 
     asset = validate_daily(asset_daily)
     if deployment_months not in config.deployment_months:
@@ -93,12 +119,12 @@ def run_dca_window(
     if first_session is None:
         raise ValueError("no eligible start session is available")
     first_session = pd.Timestamp(first_session)
-
-    target_end = first_session + pd.DateOffset(years=config.evaluation_years)
-    eligible_end = asset.index[(asset.index >= first_session) & (asset.index <= target_end)]
-    if len(eligible_end) == 0:
-        raise ValueError("evaluation window contains no sessions")
-    end_session = pd.Timestamp(eligible_end[-1])
+    end_session = _end_session(
+        asset.index,
+        first_session=first_session,
+        evaluation_years=config.evaluation_years,
+        evaluation_end=evaluation_end,
+    )
 
     trade_sessions = _trade_sessions(
         asset.index,
@@ -109,10 +135,14 @@ def run_dca_window(
     if trade_sessions[-1] > end_session:
         raise ValueError("deployment period extends beyond the evaluation window")
 
+    effective_cash_start = pd.Timestamp(cash_start) if cash_start is not None else first_session
+    if effective_cash_start > trade_sessions[0]:
+        raise ValueError("cash_start cannot be after the first buy session")
+
     base_tranche = config.capital_sgd / deployment_months
     cash = config.capital_sgd
     units = 0.0
-    last_cash_date = first_session
+    last_cash_date = effective_cash_start
     total_cash_interest = 0.0
     total_commission = 0.0
     total_fx_fees = 0.0
@@ -160,6 +190,7 @@ def run_dca_window(
 
     return {
         "start": first_session,
+        "comparison_start": effective_cash_start,
         "end": end_session,
         "deployment_months": deployment_months,
         "strategy": strategy_label(deployment_months),
@@ -187,7 +218,7 @@ def rolling_dca_backtest(
     fx_daily: pd.DataFrame | None = None,
     step_months: int = 1,
 ) -> pd.DataFrame:
-    """Compare every enabled deployment strategy across common historical start windows."""
+    """Compare every enabled deployment strategy across complete historical windows."""
 
     if step_months < 1:
         raise ValueError("step_months must be positive")
