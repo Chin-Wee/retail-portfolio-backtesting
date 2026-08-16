@@ -53,14 +53,16 @@ def test_low_wage_cpf_scope_is_explicit() -> None:
     assert budget["monthly_surplus"] == pytest.approx(400.0)
 
 
-def test_currency_conversion_uses_fx_close() -> None:
+def test_currency_conversion_uses_prior_fx_close() -> None:
     asset = _daily("2020-01-02", "2020-01-10")
     fx = _daily("2020-01-01", "2020-01-10", scale=0.013)
-    fx.loc[:, ["open", "high", "low", "close"]] = 1.35
+    columns = ["open", "high", "low", "close"]
+    fx.loc[:, columns] = 1.35
+    fx.loc[pd.Timestamp("2020-01-01"), columns] = 1.30
     converted = convert_daily_prices(asset, fx)
 
     assert converted.loc[asset.index[0], "close"] == pytest.approx(
-        asset.loc[asset.index[0], "close"] * 1.35
+        asset.loc[asset.index[0], "close"] * 1.30
     )
     assert converted.attrs["currency"] == "SGD"
 
