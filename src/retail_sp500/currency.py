@@ -8,11 +8,12 @@ _PRICE_COLUMNS = ("open", "high", "low", "close")
 
 
 def convert_daily_prices(daily: pd.DataFrame, fx: pd.DataFrame, *, label: str = "SGD") -> pd.DataFrame:
-    """Convert daily OHLC prices using the latest available FX close on each asset session."""
+    """Convert daily OHLC prices using the most recent prior FX close."""
 
     asset = validate_daily(daily)
     rates = validate_daily(fx)
-    fx_close = rates["close"].reindex(asset.index, method="ffill")
+    prior_fx_close = rates["close"].shift(1)
+    fx_close = prior_fx_close.reindex(asset.index, method="ffill")
     if fx_close.isna().any():
         first_missing = fx_close.index[fx_close.isna()][0].date().isoformat()
         raise MarketDataError(f"FX history does not cover asset history from {first_missing}")
