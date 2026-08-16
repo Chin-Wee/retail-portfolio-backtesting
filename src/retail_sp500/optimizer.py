@@ -50,11 +50,11 @@ class AutoSearchConfig:
     market: Market = "us"
     extra_trade_cost_bps: float = 0.0
     coarse_deployments: tuple[int, ...] = (1, 3, 6, 12, 18, 24, 36)
-    coarse_buy_days: tuple[int, ...] = (1, 5, 10, 15, 20, 25)
-    step_months: int = 3
+    coarse_buy_days: tuple[int, ...] = (1, 8, 15, 22)
+    step_months: int = 6
     minimum_windows: int = 15
-    top_coarse: int = 8
-    top_finalists: int = 12
+    top_coarse: int = 6
+    top_finalists: int = 10
     refine_month_radius: int = 2
     refine_day_radius: int = 2
 
@@ -71,10 +71,10 @@ class AutoSearchConfig:
             raise ValueError("step_months must be positive")
         if self.minimum_windows < 11:
             raise ValueError("minimum_windows must be at least 11")
-        if min(self.coarse_deployments) < 1:
+        if not self.coarse_deployments or min(self.coarse_deployments) < 1:
             raise ValueError("coarse deployments must be positive")
-        if not all(1 <= day <= 28 for day in self.coarse_buy_days):
-            raise ValueError("coarse buy days must be between 1 and 28")
+        if not self.coarse_buy_days or not all(1 <= day <= 25 for day in self.coarse_buy_days):
+            raise ValueError("automatic buy-day search must stay between 1 and 25")
         if min(self.top_coarse, self.top_finalists) < 1:
             raise ValueError("search finalist counts must be positive")
         if min(self.refine_month_radius, self.refine_day_radius) < 0:
@@ -94,6 +94,15 @@ class AutoSearchResult:
     step_months: int
     stability_label: str
     overfit_warning: str | None
+
+
+def _candidate_from_row(row: object) -> StrategyCandidate:
+    return StrategyCandidate(
+        int(getattr(row, "deployment_months")),
+        int(getattr(row, "buy_day")),
+        str(getattr(row, "pricing")),
+        str(getattr(row, "fx_method")),
+    )
 
 
 def _complete_windows(
@@ -172,16 +181,6 @@ def _broker(candidate: StrategyCandidate, config: AutoSearchConfig) -> BrokerFee
     )
 
 
-def _dca_config(candidate: StrategyCandidate, config: AutoSearchConfig) -> DcaConfig:
-    return DcaConfig(
-        capital_sgd=config.capital_sgd,
-        deployment_months=(candidate.deployment_months,),
-        evaluation_years=config.evaluation_years,
-        buy_day=candidate.buy_day,
-        cash_yield_annual=config.cash_yield_annual,
-    )
-
-
 def _run_candidate(
     asset: pd.DataFrame,
     fx_daily: pd.DataFrame | None,
@@ -189,7 +188,13 @@ def _run_candidate(
     config: AutoSearchConfig,
     windows: pd.DataFrame,
 ) -> pd.DataFrame:
-    dca_config = _dca_config(candidate, config)
+    dca_config = DcaConfig(
+        capital_sgd=config.capital_sgd,
+        deployment_months=(candidate.deployment_months,),
+        evaluation_years=config.evaluation_years,
+        buy_day=candidate.buy_day,
+        cash_yield_annual=config.cash_yield_annual,
+    )
     broker = _broker(candidate, config)
     records: list[dict[str, object]] = []
     for window in windows.itertuples(index=False):
@@ -209,12 +214,7 @@ def _run_candidate(
 
 
 def _benchmark_candidate(candidate: StrategyCandidate) -> StrategyCandidate:
-    return StrategyCandidate(
-        deployment_months=1,
-        buy_day=1,
-        pricing=candidate.pricing,
-        fx_method=candidate.fx_method,
-    )
+    return StrategyCandidate(1, 1, candidate.pricing, candidate.fx_method)
 
 
 def _metrics(
@@ -281,19 +281,22 @@ def _candidate_grid(config: AutoSearchConfig, *, has_fx: bool) -> set[StrategyCa
 def _refine_candidates(
     seeds: list[StrategyCandidate],
     config: AutoSearchConfig,
+    *,
+    month_radius: int | None = None,
+    day_radius: int | None = None,
 ) -> set[StrategyCandidate]:
+    month_radius = config.refine_month_radius if month_radius is None else month_radius
+    day_radius = config.refine_day_radius if day_radius is None else day_radius
     max_months = config.evaluation_years * 12
     refined: set[StrategyCandidate] = set(seeds)
     for seed in seeds:
-        month_min = max(1, seed.deployment_months - config.refine_month_radius)
-        month_max = min(max_months, seed.deployment_months + config.refine_month_radius)
-        day_min = max(1, seed.buy_day - config.refine_day_radius)
-        day_max = min(28, seed.buy_day + config.refine_day_radius)
+        month_min = max(1, seed.deployment_months - month_radius)
+        month_max = min(max_months, seed.deployment_months + month_radius)
+        day_min = max(1, seed.buy_day - day_radius)
+        day_max = min(25, seed.buy_day + day_radius)
         for month in range(month_min, month_max + 1):
             for day in range(day_min, day_max + 1):
-                refined.add(
-                    StrategyCandidate(month, day, seed.pricing, seed.fx_method)
-                )
+                refined.add(StrategyCandidate(month, day, seed.pricing, seed.fx_method))
     return refined
 
 
@@ -304,7 +307,8 @@ def _direct_neighbors(
     return [
         other
         for other in candidates
-        if other.pricing == candidate.pricing
+        if other != candidate
+        and other.pricing == candidate.pricing
         and other.fx_method == candidate.fx_method
         and abs(other.deployment_months - candidate.deployment_months) <= 1
         and abs(other.buy_day - candidate.buy_day) <= 1
@@ -324,12 +328,7 @@ def _choose_locked_candidate(
 ) -> pd.DataFrame:
     pool_by_key = validation_pool.set_index("candidate_key")
     candidate_objects = {
-        row.candidate_key: StrategyCandidate(
-            int(row.deployment_months),
-            int(row.buy_day),
-            str(row.pricing),
-            str(row.fx_method),
-        )
+        row.candidate_key: _candidate_from_row(row)
         for row in validation_pool.itertuples(index=False)
     }
     available = set(candidate_objects.values())
@@ -342,20 +341,19 @@ def _choose_locked_candidate(
             for neighbor in neighbors
             if neighbor.key in pool_by_key.index
         ]
+        validation_score = float(finalist.validation_robust_score)
         neighborhood = (
             float(pd.Series(neighbor_scores, dtype=float).median())
             if neighbor_scores
-            else float(finalist.validation_robust_score)
+            else validation_score
         )
-        validation_score = float(finalist.validation_robust_score)
-        locked_score = 0.75 * validation_score + 0.25 * neighborhood
         row = finalist._asdict()
         row.update(
             {
                 "neighborhood_robust_score": neighborhood,
                 "neighbor_count": len(neighbor_scores),
                 "stability_gap": validation_score - neighborhood,
-                "locked_score": locked_score,
+                "locked_score": 0.75 * validation_score + 0.25 * neighborhood,
             }
         )
         rows.append(row)
@@ -374,16 +372,18 @@ def _evaluate_set(
     rows: list[dict[str, object]] = []
     for candidate in sorted(candidates):
         broker_key = (candidate.pricing, candidate.fx_method)
-        if broker_key not in benchmark_cache:
-            benchmark = _benchmark_candidate(candidate)
-            benchmark_cache[broker_key] = _run_candidate(
-                asset,
-                fx_daily,
-                benchmark,
-                config,
-                windows,
-            )
-        result = _run_candidate(asset, fx_daily, candidate, config, windows)
+        try:
+            if broker_key not in benchmark_cache:
+                benchmark_cache[broker_key] = _run_candidate(
+                    asset,
+                    fx_daily,
+                    _benchmark_candidate(candidate),
+                    config,
+                    windows,
+                )
+            result = _run_candidate(asset, fx_daily, candidate, config, windows)
+        except ValueError:
+            continue
         metrics = _metrics(
             result,
             benchmark_cache[broker_key],
@@ -400,6 +400,8 @@ def _evaluate_set(
                 **{f"{partition_name}_{key}": value for key, value in metrics.items()},
             }
         )
+    if not rows:
+        raise ValueError(f"no valid candidates were available for {partition_name}")
     return pd.DataFrame.from_records(rows)
 
 
@@ -419,64 +421,32 @@ def auto_search_dca(
     holdout_windows = windows.loc[windows["partition"] == "holdout", ["window", "start", "end"]]
 
     coarse = _candidate_grid(config, has_fx=fx_daily is not None)
-    coarse_metrics = _evaluate_set(
-        asset,
-        fx_daily,
-        coarse,
-        config,
-        selection_windows,
-        "selection",
+    coarse_metrics = _sort_metrics(
+        _evaluate_set(asset, fx_daily, coarse, config, selection_windows, "selection"),
+        "selection_robust_score",
     )
-    coarse_metrics = _sort_metrics(coarse_metrics, "selection_robust_score")
     coarse_seeds = [
-        StrategyCandidate(
-            int(row.deployment_months),
-            int(row.buy_day),
-            str(row.pricing),
-            str(row.fx_method),
-        )
+        _candidate_from_row(row)
         for row in coarse_metrics.head(config.top_coarse).itertuples(index=False)
     ]
 
     refined = coarse | _refine_candidates(coarse_seeds, config)
-    selection_metrics = _evaluate_set(
-        asset,
-        fx_daily,
-        refined,
-        config,
-        selection_windows,
-        "selection",
+    selection_metrics = _sort_metrics(
+        _evaluate_set(asset, fx_daily, refined, config, selection_windows, "selection"),
+        "selection_robust_score",
     )
-    selection_metrics = _sort_metrics(selection_metrics, "selection_robust_score")
     finalist_selection = selection_metrics.head(config.top_finalists).copy()
     finalists = {
-        StrategyCandidate(
-            int(row.deployment_months),
-            int(row.buy_day),
-            str(row.pricing),
-            str(row.fx_method),
-        )
+        _candidate_from_row(row)
         for row in finalist_selection.itertuples(index=False)
     }
 
-    validation_candidates = set(finalists)
-    for finalist in list(finalists):
-        validation_candidates |= _refine_candidates([finalist], AutoSearchConfig(
-            capital_sgd=config.capital_sgd,
-            evaluation_years=config.evaluation_years,
-            cash_yield_annual=config.cash_yield_annual,
-            market=config.market,
-            extra_trade_cost_bps=config.extra_trade_cost_bps,
-            coarse_deployments=config.coarse_deployments,
-            coarse_buy_days=config.coarse_buy_days,
-            step_months=config.step_months,
-            minimum_windows=config.minimum_windows,
-            top_coarse=config.top_coarse,
-            top_finalists=config.top_finalists,
-            refine_month_radius=1,
-            refine_day_radius=1,
-        ))
-
+    validation_candidates = set(finalists) | _refine_candidates(
+        list(finalists),
+        config,
+        month_radius=1,
+        day_radius=1,
+    )
     validation_metrics = _evaluate_set(
         asset,
         fx_daily,
@@ -498,6 +468,9 @@ def auto_search_dca(
         how="inner",
         validate="one_to_one",
     )
+    if finalist_validation.empty:
+        raise ValueError("none of the selection finalists remained valid on validation windows")
+
     locked = _choose_locked_candidate(finalist_validation, validation_metrics)
     winner_row = locked.iloc[0]
     winner = StrategyCandidate(
@@ -516,26 +489,20 @@ def auto_search_dca(
         "holdout",
     )
     holdout_row = holdout_metrics.iloc[0]
-    winner_results = _run_candidate(
-        asset,
-        fx_daily,
-        winner,
-        config,
-        holdout_windows,
-    )
+    winner_results = _run_candidate(asset, fx_daily, winner, config, holdout_windows)
 
     selection = {
-        key.removeprefix("selection_"): value
+        str(key).removeprefix("selection_"): value
         for key, value in winner_row.items()
         if str(key).startswith("selection_")
     }
     validation = {
-        key.removeprefix("validation_"): value
+        str(key).removeprefix("validation_"): value
         for key, value in winner_row.items()
         if str(key).startswith("validation_")
     }
     holdout = {
-        key.removeprefix("holdout_"): value
+        str(key).removeprefix("holdout_"): value
         for key, value in holdout_row.items()
         if str(key).startswith("holdout_")
     }
