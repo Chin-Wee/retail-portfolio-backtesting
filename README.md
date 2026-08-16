@@ -43,8 +43,10 @@ The default app configuration uses:
 Asset:       SPY
 Currency:    USD
 FX to SGD:   USD/SGD
-History:     2007-06-01 onward
+History:     2008-01-01 onward
 ```
+
+The default start date stays below Twelve Data's 5,000-row response ceiling for weekday FX history while still supporting the app's maximum 15-year planning horizon.
 
 Downloaded data is cached under `data/*_adjusted_daily.csv`.
 
@@ -72,7 +74,7 @@ The app uses the repository's existing validated Twelve Data loader and local CS
 
 For USD assets it also loads `USD/SGD`, then converts each historical asset session into SGD before simulation. This prevents a USD ETF path from being incorrectly treated as if its prices were already in Singapore dollars.
 
-Twelve Data is requested with `adjust=all`, so supported instruments are adjusted for dividends and splits before the planner uses them.
+Twelve Data is requested with `adjust=all`, so supported instruments are adjusted for dividends and splits before the planner uses them. Instruments such as FX that do not provide volume are represented with zero volume because volume is not used by the personal-finance simulation.
 
 ### 3. Stress-test the plan
 
