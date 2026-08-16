@@ -155,8 +155,9 @@ def run_plan_window(
         reserve_target = config.emergency_months * expenses
         sold = 0.0
         invested = 0.0
+        liquidity_stress = cash < 0.0
 
-        if cash < 0.0 and units > 0.0:
+        if liquidity_stress and units > 0.0:
             required = -cash
             sold_units = min(units, required / price)
             sold = sold_units * price
@@ -196,7 +197,7 @@ def run_plan_window(
                 "real_liquid_net_worth": real_liquid_net_worth,
                 "cumulative_employee_cpf": cumulative_employee_cpf,
                 "cumulative_employer_cpf": cumulative_employer_cpf,
-                "cash_shortfall": cash < 0.0,
+                "cash_shortfall": liquidity_stress,
             }
         )
 
