@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from retail_sp500.currency import convert_daily_prices
 from retail_sp500.data import DEFAULT_START_DATE, MarketDataError, load_market, market_summary
 from retail_sp500.planner import PlanConfig, monthly_budget, rolling_plan_backtest, scenario_summary
 
@@ -28,7 +29,7 @@ def _money(value: float) -> str:
 
 def _cache_path(symbol: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", symbol.strip().lower()) or "market"
-    return Path("data") / f"{safe}_daily.csv"
+    return Path("data") / f"{safe}_adjusted_daily.csv"
 
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
@@ -49,18 +50,26 @@ def _load_market_cached(
 
 st.title("Singapore Money Planner")
 st.caption(
-    "Stress-test your salary, expenses, emergency fund and monthly investing against real market history. "
+    "Stress-test your salary, expenses, emergency fund and monthly investing against real market and FX history. "
     "This is an educational planning tool, not personalised financial advice."
 )
 
 with st.sidebar:
     st.header("Market data")
     symbol = st.text_input("ETF / market symbol", value="SPY", help="Symbol supported by your Twelve Data plan.")
+    asset_currency = st.selectbox("Asset price currency", options=["USD", "SGD"], index=0)
+    fx_symbol = ""
+    if asset_currency == "USD":
+        fx_symbol = st.text_input(
+            "FX pair to SGD",
+            value="USD/SGD",
+            help="Used to convert each historical asset price into Singapore dollars.",
+        )
     start_date = st.text_input("History start date", value=DEFAULT_START_DATE)
     default_key = os.getenv("TWELVE_DATA_API_KEY", "") or _secret("TWELVE_DATA_API_KEY")
     api_key = st.text_input("Twelve Data API key", value=default_key, type="password")
     refresh = st.checkbox("Refresh market data", value=False)
-    st.caption("Downloaded daily OHLCV is cached locally after the first successful request.")
+    st.caption("The first successful request is cached locally using dividend/split-adjusted daily prices.")
 
 st.subheader("1. Your monthly finances")
 left, middle, right = st.columns(3)
@@ -118,16 +127,17 @@ else:
 
 st.subheader("2. Backtest the plan")
 st.write(
-    "Each scenario applies the same future salary/expense assumptions to a different historical market window. "
-    "This shows how sensitive the plan would have been to starting in different market conditions."
+    "Each scenario applies the same future salary and expense assumptions to a different historical market window. "
+    "USD assets are converted with the matching historical USD/SGD series before the plan is simulated."
 )
 
 run = st.button("Run historical stress test", type="primary")
 if run:
-    if cpf_enabled and 0 < salary <= 750:
-        st.error("The MVP's CPF defaults cover the full-rate wage table for monthly wages above S$750. Disable CPF for this run or use a supported wage level.")
-        st.stop()
-    if not api_key and not _cache_path(symbol).exists():
+    required_symbols = [symbol.strip()]
+    if asset_currency == "USD":
+        required_symbols.append(fx_symbol.strip())
+    missing_cache = any(item and not _cache_path(item).exists() for item in required_symbols)
+    if not api_key and missing_cache:
         st.error("A Twelve Data API key is required for the first download. Add it in the sidebar or set TWELVE_DATA_API_KEY.")
         st.stop()
 
@@ -146,7 +156,13 @@ if run:
 
     try:
         with st.spinner("Loading market history and running scenarios..."):
-            daily = _load_market_cached(api_key, symbol.strip().upper(), start_date, refresh)
+            asset = _load_market_cached(api_key, symbol.strip().upper(), start_date, refresh)
+            if asset_currency == "USD":
+                fx = _load_market_cached(api_key, fx_symbol.strip().upper(), start_date, refresh)
+                daily = convert_daily_prices(asset, fx, label="SGD")
+            else:
+                daily = asset
+                daily.attrs["currency"] = "SGD"
             scenarios = rolling_plan_backtest(daily, config=config)
             summary = scenario_summary(scenarios)
     except (ValueError, MarketDataError, OSError) as exc:
@@ -154,8 +170,9 @@ if run:
         st.stop()
 
     source = market_summary(daily, symbol=symbol.strip().upper())
+    conversion_note = f", converted through {fx_symbol.strip().upper()}" if asset_currency == "USD" else ""
     st.success(
-        f"Loaded {source['sessions']:,} daily sessions for {source['symbol']} from {source['start']} to {source['end']} ({source['source']})."
+        f"Loaded {source['sessions']:,} daily sessions for {symbol.strip().upper()} from {source['start']} to {source['end']}{conversion_note}."
     )
 
     st.subheader("3. Results")
@@ -163,7 +180,7 @@ if run:
     r1.metric("Worst real ending wealth", _money(summary["worst_real_ending"]))
     r2.metric("Median real ending wealth", _money(summary["median_real_ending"]))
     r3.metric("Best real ending wealth", _money(summary["best_real_ending"]))
-    r4.metric("Cash-shortfall scenarios", f"{summary['cash_shortfall_rate']:.0%}")
+    r4.metric("Liquidity-stress scenarios", f"{summary['cash_shortfall_rate']:.0%}")
 
     cpf_total = float(scenarios["total_cpf_contributions"].median())
     st.caption(
@@ -215,8 +232,8 @@ if run:
     st.subheader("Model boundaries")
     st.markdown(
         "- CPF uses the 2026 full-rate age table and S$8,000 Ordinary Wage ceiling for the whole scenario; future policy changes are not predicted.\n"
-        "- Market prices come from the configured Twelve Data symbol. The current engine uses price OHLCV and does not add dividends.\n"
-        "- Cash earns 0%; brokerage fees, taxes, FX costs, bonuses, income tax, housing and CPF account interest/withdrawals are not modelled.\n"
+        "- Twelve Data is requested with dividend and split adjustment enabled. USD assets are converted to SGD using the configured historical FX series.\n"
+        "- Cash earns 0%; brokerage fees, taxes, bonuses, income tax, housing and CPF account interest/withdrawals are not modelled.\n"
         "- Current investments are assumed to already be invested in the selected symbol.\n"
         "- Historical outcomes are stress scenarios, not forecasts."
     )
