@@ -91,27 +91,21 @@ def _end_session(
     return pd.Timestamp(eligible[-1])
 
 
-def run_dca_window(
-    asset_daily: pd.DataFrame,
+def _run_dca_window_validated(
+    asset: pd.DataFrame,
+    fx_rates: pd.Series,
     *,
     start: pd.Timestamp,
     deployment_months: int,
     config: DcaConfig,
     broker: BrokerFeeConfig,
-    fx_daily: pd.DataFrame | None = None,
     evaluation_end: pd.Timestamp | None = None,
     cash_start: pd.Timestamp | None = None,
 ) -> dict[str, object]:
-    """Run one capital-deployment strategy over one complete historical window."""
-
-    asset = validate_daily(asset_daily)
     if deployment_months not in config.deployment_months:
         raise ValueError("deployment_months is not enabled in the DCA config")
-
-    if fx_daily is None:
-        fx_rates = pd.Series(1.0, index=asset.index, name="fx_close", dtype=float)
-    else:
-        fx_rates = prior_fx_close(asset.index, fx_daily)
+    if not asset.index.equals(fx_rates.index):
+        raise ValueError("FX rates must align with the validated asset sessions")
 
     requested_start = pd.Timestamp(start)
     start_month = requested_start.to_period("M")
@@ -210,6 +204,37 @@ def run_dca_window(
     }
 
 
+def run_dca_window(
+    asset_daily: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    deployment_months: int,
+    config: DcaConfig,
+    broker: BrokerFeeConfig,
+    fx_daily: pd.DataFrame | None = None,
+    evaluation_end: pd.Timestamp | None = None,
+    cash_start: pd.Timestamp | None = None,
+) -> dict[str, object]:
+    """Run one capital-deployment strategy over one complete historical window."""
+
+    asset = validate_daily(asset_daily)
+    fx_rates = (
+        pd.Series(1.0, index=asset.index, name="fx_close", dtype=float)
+        if fx_daily is None
+        else prior_fx_close(asset.index, fx_daily)
+    )
+    return _run_dca_window_validated(
+        asset,
+        fx_rates,
+        start=start,
+        deployment_months=deployment_months,
+        config=config,
+        broker=broker,
+        evaluation_end=evaluation_end,
+        cash_start=cash_start,
+    )
+
+
 def rolling_dca_backtest(
     asset_daily: pd.DataFrame,
     *,
@@ -224,6 +249,11 @@ def rolling_dca_backtest(
         raise ValueError("step_months must be positive")
 
     asset = validate_daily(asset_daily)
+    fx_rates = (
+        pd.Series(1.0, index=asset.index, name="fx_close", dtype=float)
+        if fx_daily is None
+        else prior_fx_close(asset.index, fx_daily)
+    )
     months = asset.index.to_period("M").unique()
     records: list[dict[str, object]] = []
 
@@ -237,13 +267,13 @@ def rolling_dca_backtest(
         try:
             for deployment in sorted(config.deployment_months):
                 window_records.append(
-                    run_dca_window(
+                    _run_dca_window_validated(
                         asset,
+                        fx_rates,
                         start=pd.Timestamp(start),
                         deployment_months=deployment,
                         config=config,
                         broker=broker,
-                        fx_daily=fx_daily,
                     )
                 )
         except ValueError:
