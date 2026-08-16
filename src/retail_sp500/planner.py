@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .data import validate_daily
-from .engine import first_salary_session
+from .engine import _first_salary_session as first_salary_session
 
 CPF_2026_OW_CEILING = 8_000.0
 
@@ -69,6 +69,10 @@ def monthly_budget(
 ) -> dict[str, float]:
     if min(gross_salary, monthly_expenses, ow_ceiling) < 0.0:
         raise ValueError("salary, expenses and CPF ceiling cannot be negative")
+    if cpf_enabled and 0.0 < gross_salary <= 750.0:
+        raise ValueError(
+            "2026 CPF defaults in this MVP cover monthly wages above S$750; disable CPF for lower wages"
+        )
 
     employer_rate, employee_rate = cpf_2026_rates(age)
     cpf_wage = min(gross_salary, ow_ceiling) if cpf_enabled else 0.0
