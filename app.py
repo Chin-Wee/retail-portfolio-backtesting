@@ -16,8 +16,9 @@ from retail_sp500.broker import (
     ibkr_pro_preset,
 )
 from retail_sp500.currency import convert_daily_prices, prior_fx_close
-from retail_sp500.data import DEFAULT_START_DATE, MarketDataError, load_market, market_summary
+from retail_sp500.data import DEFAULT_START_DATE, MarketDataError, load_market
 from retail_sp500.dca import DcaConfig, rolling_dca_backtest, summarize_dca
+from retail_sp500.optimizer import AutoSearchConfig, auto_search_dca
 from retail_sp500.planner import PlanConfig, monthly_budget, rolling_plan_backtest, scenario_summary
 
 st.set_page_config(page_title="Singapore Money Planner", page_icon="💰", layout="wide")
@@ -33,6 +34,10 @@ def _secret(name: str) -> str:
 
 def _money(value: float) -> str:
     return f"S${value:,.0f}"
+
+
+def _pct(value: float) -> str:
+    return f"{value:+.1%}"
 
 
 def _cache_path(symbol: str) -> Path:
@@ -75,9 +80,13 @@ def _load_asset_bundle(
     return asset, None, daily_sgd
 
 
+def _missing_data(api_key: str, symbols: list[str]) -> bool:
+    return not api_key and any(item and not _cache_path(item).exists() for item in symbols)
+
+
 st.title("Singapore Money Planner")
 st.caption(
-    "Plan monthly finances or compare a lump sum with dollar-cost averaging using real market and FX history. "
+    "Automatically search for a robust lump-sum/DCA configuration, or inspect the assumptions manually. "
     "Historical backtests are educational scenarios, not personalised financial advice."
 )
 
@@ -98,7 +107,204 @@ with st.sidebar:
     refresh = st.checkbox("Refresh market data", value=False)
     st.caption("Successful requests are cached locally using dividend/split-adjusted daily prices.")
 
-personal_tab, dca_tab = st.tabs(["Personal plan", "S$1m DCA lab"])
+
+auto_tab, personal_tab, manual_tab = st.tabs(
+    ["Auto strategy", "Personal plan", "Manual DCA"]
+)
+
+
+with auto_tab:
+    st.subheader("Find a robust strategy for me")
+    st.write(
+        "The app searches deployment length, monthly buy day, IBKR Pro Fixed/Tiered pricing, "
+        "and manual FX/AutoFX. It tunes on older historical starts, validates on a later block, "
+        "locks one configuration, then reads the newest holdout starts without retuning."
+    )
+
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        auto_capital = st.number_input(
+            "Starting capital (SGD)",
+            min_value=1_000.0,
+            value=1_000_000.0,
+            step=10_000.0,
+            format="%.0f",
+            key="auto_capital",
+        )
+    with a2:
+        auto_horizon = st.slider(
+            "Evaluation horizon (years)",
+            min_value=2,
+            max_value=10,
+            value=5,
+            step=1,
+            key="auto_horizon",
+            help="Shorter horizons provide more complete historical start windows for tuning.",
+        )
+    with a3:
+        auto_cash_yield = st.number_input(
+            "Undeployed cash yield (% p.a.)",
+            min_value=-10.0,
+            max_value=20.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
+            key="auto_cash_yield",
+        )
+    with a4:
+        auto_venue_label = st.selectbox(
+            "ETF venue",
+            ["US exchange-listed ETF", "LSE USD-denominated ETF"],
+            key="auto_venue",
+        )
+        auto_venue = "us" if auto_venue_label.startswith("US") else "lse_usd"
+
+    with st.expander("Search assumptions"):
+        auto_extra_bps = st.number_input(
+            "Extra Tiered venue / clearing estimate (bps)",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+            format="%.3f",
+            key="auto_extra_bps",
+        )
+        st.caption(
+            "Automatic search keeps your ETF, starting capital, horizon and cash yield fixed. "
+            "Those are assumptions, not parameters the optimizer is allowed to cherry-pick."
+        )
+        st.caption(
+            "Search uses a coarse grid followed by local refinement around strong parameter regions. "
+            "Candidate ranking balances median outcome, 10th-percentile outcome and performance versus immediate deployment."
+        )
+
+    run_auto = st.button("Find a robust strategy", type="primary", key="run_auto")
+    if run_auto:
+        if asset_currency != "USD":
+            st.error(
+                "The automatic broker search currently supports USD-traded ETFs. "
+                "Use Manual DCA with a custom fee model for an SGD-traded asset."
+            )
+        else:
+            required_symbols = [symbol.strip(), fx_symbol.strip()]
+            if _missing_data(api_key, required_symbols):
+                st.error("A Twelve Data API key is required for the first asset/FX download.")
+            else:
+                search_config = AutoSearchConfig(
+                    capital_sgd=float(auto_capital),
+                    evaluation_years=int(auto_horizon),
+                    cash_yield_annual=float(auto_cash_yield) / 100.0,
+                    market=auto_venue,
+                    extra_trade_cost_bps=float(auto_extra_bps),
+                )
+                try:
+                    with st.spinner("Searching and validating robust configurations..."):
+                        asset, fx, _ = _load_asset_bundle(
+                            api_key=api_key,
+                            symbol=symbol,
+                            asset_currency=asset_currency,
+                            fx_symbol=fx_symbol,
+                            start_date=start_date,
+                            refresh=refresh,
+                        )
+                        result = auto_search_dca(
+                            asset,
+                            fx_daily=fx,
+                            config=search_config,
+                        )
+                except (ValueError, MarketDataError, OSError) as exc:
+                    st.error(f"Could not run automatic search: {exc}")
+                else:
+                    winner = result.winner
+                    st.markdown("### Recommended configuration")
+                    st.success(winner.label)
+
+                    r1, r2, r3, r4 = st.columns(4)
+                    r1.metric("Stability", result.stability_label)
+                    r2.metric("Configurations searched", f"{result.candidate_count:,}")
+                    r3.metric(
+                        "Validation median vs immediate",
+                        _pct(float(result.validation["median_delta_vs_immediate"])),
+                    )
+                    r4.metric(
+                        "Holdout median vs immediate",
+                        _pct(float(result.holdout["median_delta_vs_immediate"])),
+                    )
+
+                    h1, h2, h3 = st.columns(3)
+                    h1.metric(
+                        "Holdout median ending wealth",
+                        _money(float(result.holdout["median_ending_wealth_sgd"])),
+                    )
+                    h2.metric(
+                        "Holdout 10th-percentile wealth",
+                        _money(float(result.holdout["p10_ending_wealth_sgd"])),
+                    )
+                    h3.metric(
+                        "Holdout win rate vs immediate",
+                        f"{float(result.holdout['win_rate_vs_immediate']):.0%}",
+                    )
+
+                    if result.overfit_warning:
+                        st.warning(result.overfit_warning)
+                    else:
+                        st.info(
+                            "The newest holdout starts did not trigger the configured degradation warning. "
+                            "This is still historical evidence, not a forecast."
+                        )
+
+                    top = result.search_table.head(8).copy()
+                    top["Selection score"] = top["selection_robust_score"].map(lambda value: f"{value:.3f}")
+                    top["Validation score"] = top["validation_robust_score"].map(lambda value: f"{value:.3f}")
+                    top["Stable-region score"] = top["locked_score"].map(lambda value: f"{value:.3f}")
+                    top["Validation median"] = top["validation_median_ending_wealth_sgd"].map(_money)
+                    top["Validation fees"] = top["validation_median_fees_sgd"].map(_money)
+                    st.markdown("#### Finalists before holdout")
+                    st.dataframe(
+                        top[
+                            [
+                                "candidate_label",
+                                "Selection score",
+                                "Validation score",
+                                "Stable-region score",
+                                "Validation median",
+                                "Validation fees",
+                                "neighbor_count",
+                            ]
+                        ].rename(
+                            columns={
+                                "candidate_label": "Configuration",
+                                "neighbor_count": "Nearby configs checked",
+                            }
+                        ),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+                    holdout_chart = px.line(
+                        result.holdout_table,
+                        x="comparison_start",
+                        y="ending_wealth_sgd",
+                        markers=True,
+                        labels={
+                            "comparison_start": "Newest historical start",
+                            "ending_wealth_sgd": "Ending wealth (SGD)",
+                        },
+                        title="Locked recommendation on newest holdout starts",
+                    )
+                    st.plotly_chart(holdout_chart, use_container_width=True)
+
+                    partition_counts = result.windows.groupby("partition").size().to_dict()
+                    st.caption(
+                        f"Search spacing used: every {result.step_months} month(s). "
+                        f"Selection starts: {partition_counts.get('selection', 0)}, "
+                        f"validation starts: {partition_counts.get('validation', 0)}, "
+                        f"holdout starts: {partition_counts.get('holdout', 0)}."
+                    )
+                    st.caption(
+                        "Historical start-window paths can overlap, so these observations are not statistically independent. "
+                        "The split reduces direct parameter tuning into the newest starts but cannot eliminate backtest overfitting."
+                    )
+
 
 with personal_tab:
     st.subheader("Monthly finances")
@@ -204,8 +410,7 @@ with personal_tab:
         required_symbols = [symbol.strip()]
         if asset_currency == "USD":
             required_symbols.append(fx_symbol.strip())
-        missing_cache = any(item and not _cache_path(item).exists() for item in required_symbols)
-        if not api_key and missing_cache:
+        if _missing_data(api_key, required_symbols):
             st.error("A Twelve Data API key is required for the first download.")
         else:
             config = PlanConfig(
@@ -254,14 +459,15 @@ with personal_tab:
                 )
                 st.plotly_chart(figure, use_container_width=True)
                 st.caption(
-                    "The personal-plan model still excludes brokerage costs. Use the DCA lab for explicit IBKR transaction-cost analysis."
+                    "The personal-plan model still excludes brokerage costs. Use Auto strategy or Manual DCA for explicit IBKR transaction-cost analysis."
                 )
 
-with dca_tab:
-    st.subheader("Deploy an existing lump sum")
+
+with manual_tab:
+    st.subheader("Inspect lump sum vs DCA manually")
     st.write(
-        "Compare investing everything immediately with spreading the same starting capital across equal monthly purchases. "
-        "Every strategy uses the same historical start date and the same terminal date."
+        "Use this tab when you want to control the deployment periods and IBKR assumptions yourself. "
+        "Every strategy uses the same capital and a complete evaluation horizon."
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -331,12 +537,8 @@ with dca_tab:
             "No FX": "none",
         }[fx_label]
 
-    broker = ibkr_pro_preset(
-        market=venue,
-        pricing=pricing,
-        fx_method=fx_method,
-    )
-
+    broker = ibkr_pro_preset(market=venue, pricing=pricing, fx_method=fx_method)
+    custom_override = False
     with st.expander("Advanced fee settings"):
         st.caption(
             f"Published IBKR Singapore preset checked {IBKR_FEE_SCHEDULE_AS_OF}. Tiered exchange/clearing costs vary by execution venue."
@@ -394,39 +596,35 @@ with dca_tab:
             )
 
     if venue == "us" and pricing == "fixed":
-        st.caption("US Fixed preset: USD 0.005/share, USD 1 minimum per order; buy-side model.")
+        st.caption("US Fixed: USD 0.005/share, USD 1 minimum per order.")
     elif venue == "us":
-        st.caption("US Tiered preset: first tier USD 0.0035/share, USD 0.35 minimum, plus configurable venue/clearing costs.")
+        st.caption("US Tiered first tier: USD 0.0035/share, USD 0.35 minimum, plus configurable venue costs.")
     elif pricing == "fixed":
-        st.caption("LSE USD Fixed preset: 0.05% of trade value, USD 4 minimum for SmartRouted USD orders.")
+        st.caption("LSE USD Fixed: 0.05% of trade value, USD 4 minimum.")
     else:
-        st.caption("LSE USD Tiered preset: 0.05% of trade value, USD 1.70 minimum, USD 39 maximum, plus venue/clearing costs.")
+        st.caption("LSE USD Tiered: 0.05%, USD 1.70 minimum, USD 39 maximum, plus venue costs.")
     if asset_currency == "USD":
-        st.caption(
-            "Manual spot FX preset: 0.20 bp with USD 2 minimum per conversion. AutoFX preset: 3 bps."
-        )
+        st.caption("Manual spot FX: 0.20 bp with USD 2 minimum. AutoFX: 3 bps.")
 
     spacing_label = st.selectbox(
         "Historical start-date spacing",
         ["Monthly", "Quarterly", "Yearly"],
         index=0,
-        help="Monthly gives the most complete sample but takes more computation.",
         key="dca_spacing",
     )
     step_months = {"Monthly": 1, "Quarterly": 3, "Yearly": 12}[spacing_label]
 
-    run_dca = st.button("Compare lump sum vs DCA", type="primary", key="run_dca")
+    run_dca = st.button("Compare manually", type="primary", key="run_dca")
     if run_dca:
         if asset_currency != "USD" and not custom_override:
-            st.error("The built-in IBKR presets here are for USD-traded ETFs. Use the advanced custom override for an SGD-traded asset.")
+            st.error("Built-in IBKR presets are for USD-traded ETFs. Use the custom override for an SGD-traded asset.")
         elif not deployments:
             st.error("Choose at least one deployment strategy.")
         else:
             required_symbols = [symbol.strip()]
             if asset_currency == "USD":
                 required_symbols.append(fx_symbol.strip())
-            missing_cache = any(item and not _cache_path(item).exists() for item in required_symbols)
-            if not api_key and missing_cache:
+            if _missing_data(api_key, required_symbols):
                 st.error("A Twelve Data API key is required for the first download.")
             else:
                 dca_config = DcaConfig(
@@ -437,7 +635,7 @@ with dca_tab:
                     cash_yield_annual=float(cash_yield) / 100.0,
                 )
                 try:
-                    with st.spinner("Running identical-start-date lump-sum and DCA scenarios..."):
+                    with st.spinner("Running complete lump-sum and DCA scenarios..."):
                         asset, fx, _ = _load_asset_bundle(
                             api_key=api_key,
                             symbol=symbol,
@@ -457,10 +655,7 @@ with dca_tab:
                 except (ValueError, MarketDataError, OSError) as exc:
                     st.error(f"Could not run the DCA analysis: {exc}")
                 else:
-                    if fx is None:
-                        latest_fx = 1.0
-                    else:
-                        latest_fx = float(prior_fx_close(asset.index, fx).iloc[-1])
+                    latest_fx = 1.0 if fx is None else float(prior_fx_close(asset.index, fx).iloc[-1])
                     current_estimate = execute_buy(
                         float(dca_capital),
                         asset_price=float(asset["close"].iloc[-1]),
@@ -469,19 +664,12 @@ with dca_tab:
                     )
 
                     lump_row = summary.loc[summary["deployment_months"] == 1].iloc[0]
-                    non_lump = summary.loc[summary["deployment_months"] > 1]
                     best_row = summary.loc[summary["median_ending_wealth_sgd"].idxmax()]
-
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Historical start windows", f"{int(lump_row['scenarios']):,}")
                     m2.metric("Lump-sum median ending", _money(float(lump_row["median_ending_wealth_sgd"])))
                     m3.metric("Highest median strategy", str(best_row["strategy"]))
                     m4.metric("Current full-deployment fee estimate", _money(current_estimate.total_fees_sgd))
-
-                    st.caption(
-                        "The fee estimate uses the latest loaded price/FX rate only to illustrate the selected brokerage settings. "
-                        "Each historical scenario uses the rate and price from its own purchase dates."
-                    )
 
                     display = summary.copy()
                     display["Median ending wealth"] = display["median_ending_wealth_sgd"].map(_money)
@@ -516,31 +704,16 @@ with dca_tab:
                         category_orders={"strategy": order},
                         points=False,
                         labels={"strategy": "Deployment", "ending_wealth_sgd": "Ending wealth (SGD)"},
-                        title=f"{dca_horizon}-year ending wealth across historical start dates",
+                        title=f"{dca_horizon}-year ending wealth across complete historical starts",
                     )
                     st.plotly_chart(box, use_container_width=True)
 
-                    if not non_lump.empty:
-                        relative = non_lump[["strategy", "median_delta_vs_lump_sum_sgd"]].copy()
-                        relative_chart = px.bar(
-                            relative,
-                            x="strategy",
-                            y="median_delta_vs_lump_sum_sgd",
-                            category_orders={"strategy": order},
-                            labels={
-                                "strategy": "Deployment",
-                                "median_delta_vs_lump_sum_sgd": "Median ending difference vs lump sum (SGD)",
-                            },
-                            title="Median historical cost or benefit of delaying deployment",
-                        )
-                        st.plotly_chart(relative_chart, use_container_width=True)
-
                     st.markdown("#### Model boundaries")
                     st.markdown(
-                        f"- IBKR presets are based on the Singapore commission schedule checked {IBKR_FEE_SCHEDULE_AS_OF}; use the override if the schedule changes.\n"
-                        "- Tiered venue, exchange and clearing charges vary by execution venue; the extra-bps field is intentionally user-configurable.\n"
-                        "- Buy-side commissions and SGD-to-USD conversion costs are modelled. Taxes, bid/ask spread, market impact and eventual selling costs are not.\n"
-                        "- Fractional units are allowed so equal SGD tranches can be compared without whole-share rounding noise.\n"
-                        "- Undeployed capital earns only the cash yield you enter.\n"
-                        "- Historical outcomes measure what happened in prior market/FX paths; they are not a forecast of the next deployment period."
+                        f"- IBKR presets are based on the Singapore schedule checked {IBKR_FEE_SCHEDULE_AS_OF}; use the override if it changes.\n"
+                        "- Tiered venue/exchange/clearing charges vary and remain user-configurable.\n"
+                        "- Buy-side commissions and SGD-to-USD conversion are modelled; selling costs, spread, market impact and taxes are not.\n"
+                        "- Fractional units are allowed to avoid whole-share rounding noise.\n"
+                        "- Undeployed capital earns only the cash yield entered above.\n"
+                        "- Historical outcomes are not forecasts."
                     )
