@@ -6,8 +6,9 @@ from typing import Literal
 import pandas as pd
 
 from .broker import BrokerFeeConfig, ibkr_pro_preset
+from .currency import prior_fx_close
 from .data import validate_daily
-from .dca import DcaConfig, run_dca_window
+from .dca import DcaConfig, _run_dca_window_validated
 from .engine import _first_salary_session as first_salary_session
 
 Pricing = Literal["fixed", "tiered"]
@@ -183,7 +184,7 @@ def _broker(candidate: StrategyCandidate, config: AutoSearchConfig) -> BrokerFee
 
 def _run_candidate(
     asset: pd.DataFrame,
-    fx_daily: pd.DataFrame | None,
+    fx_rates: pd.Series,
     candidate: StrategyCandidate,
     config: AutoSearchConfig,
     windows: pd.DataFrame,
@@ -198,13 +199,13 @@ def _run_candidate(
     broker = _broker(candidate, config)
     records: list[dict[str, object]] = []
     for window in windows.itertuples(index=False):
-        result = run_dca_window(
+        result = _run_dca_window_validated(
             asset,
+            fx_rates,
             start=pd.Timestamp(window.start),
             deployment_months=candidate.deployment_months,
             config=dca_config,
             broker=broker,
-            fx_daily=fx_daily,
             evaluation_end=pd.Timestamp(window.end),
             cash_start=pd.Timestamp(window.start),
         )
@@ -362,7 +363,7 @@ def _choose_locked_candidate(
 
 def _evaluate_set(
     asset: pd.DataFrame,
-    fx_daily: pd.DataFrame | None,
+    fx_rates: pd.Series,
     candidates: set[StrategyCandidate],
     config: AutoSearchConfig,
     windows: pd.DataFrame,
@@ -376,12 +377,12 @@ def _evaluate_set(
             if broker_key not in benchmark_cache:
                 benchmark_cache[broker_key] = _run_candidate(
                     asset,
-                    fx_daily,
+                    fx_rates,
                     _benchmark_candidate(candidate),
                     config,
                     windows,
                 )
-            result = _run_candidate(asset, fx_daily, candidate, config, windows)
+            result = _run_candidate(asset, fx_rates, candidate, config, windows)
         except ValueError:
             continue
         metrics = _metrics(
@@ -414,6 +415,11 @@ def auto_search_dca(
     """Search DCA and IBKR settings without using the holdout to choose the winner."""
 
     asset = validate_daily(asset_daily)
+    fx_rates = (
+        pd.Series(1.0, index=asset.index, name="fx_close", dtype=float)
+        if fx_daily is None
+        else prior_fx_close(asset.index, fx_daily)
+    )
     windows, used_step = _search_windows(asset, config)
     windows = _split_windows(windows)
     selection_windows = windows.loc[windows["partition"] == "selection", ["window", "start", "end"]]
@@ -422,7 +428,7 @@ def auto_search_dca(
 
     coarse = _candidate_grid(config, has_fx=fx_daily is not None)
     coarse_metrics = _sort_metrics(
-        _evaluate_set(asset, fx_daily, coarse, config, selection_windows, "selection"),
+        _evaluate_set(asset, fx_rates, coarse, config, selection_windows, "selection"),
         "selection_robust_score",
     )
     coarse_seeds = [
@@ -432,7 +438,7 @@ def auto_search_dca(
 
     refined = coarse | _refine_candidates(coarse_seeds, config)
     selection_metrics = _sort_metrics(
-        _evaluate_set(asset, fx_daily, refined, config, selection_windows, "selection"),
+        _evaluate_set(asset, fx_rates, refined, config, selection_windows, "selection"),
         "selection_robust_score",
     )
     finalist_selection = selection_metrics.head(config.top_finalists).copy()
@@ -449,7 +455,7 @@ def auto_search_dca(
     )
     validation_metrics = _evaluate_set(
         asset,
-        fx_daily,
+        fx_rates,
         validation_candidates,
         config,
         validation_windows,
@@ -482,14 +488,14 @@ def auto_search_dca(
 
     holdout_metrics = _evaluate_set(
         asset,
-        fx_daily,
+        fx_rates,
         {winner},
         config,
         holdout_windows,
         "holdout",
     )
     holdout_row = holdout_metrics.iloc[0]
-    winner_results = _run_candidate(asset, fx_daily, winner, config, holdout_windows)
+    winner_results = _run_candidate(asset, fx_rates, winner, config, holdout_windows)
 
     selection = {
         str(key).removeprefix("selection_"): value
