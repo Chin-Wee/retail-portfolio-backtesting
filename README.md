@@ -1,9 +1,10 @@
 # Singapore Money Planner
 
-A personal-finance backtesting app for young Singaporeans with two practical workflows:
+A personal-finance backtesting app for young Singaporeans with three workflows:
 
-1. **Personal plan** — stress-test salary, CPF, expenses, emergency cash and monthly investing across real historical market/FX paths.
-2. **S$1m DCA lab** — compare investing an available lump sum immediately against spreading the same capital across monthly purchases, including configurable IBKR Pro trading and FX costs.
+1. **Auto strategy** — automatically search for a historically robust lump-sum/DCA and IBKR configuration for a non-technical user.
+2. **Personal plan** — stress-test salary, CPF, expenses, emergency cash and monthly investing across real historical market/FX paths.
+3. **Manual DCA** — inspect lump-sum versus DCA choices with full control over deployment and brokerage assumptions.
 
 The older limit-order research remains available as an advanced lab instead of being the product homepage.
 
@@ -33,6 +34,82 @@ History:     2008-01-01 onward
 
 Downloaded data is cached under `data/*_adjusted_daily.csv`.
 
+## Auto strategy: default non-technical flow
+
+The first tab is designed for the question:
+
+> I have a lump sum. Search the sensible choices and tell me which configuration was most robust historically.
+
+The default capital is **S$1,000,000**, but it is editable.
+
+The user chooses only assumptions that the optimizer should not be allowed to cherry-pick:
+
+- starting capital;
+- ETF and asset currency;
+- evaluation horizon;
+- annual yield earned by undeployed cash;
+- US or LSE USD ETF venue;
+- optional extra Tiered venue/clearing cost estimate.
+
+The app then searches controllable execution choices automatically:
+
+- lump sum or DCA deployment length;
+- monthly buy day;
+- IBKR Pro Fixed or Tiered pricing;
+- manual spot FX or AutoFX for USD assets.
+
+### Search process
+
+The optimizer does not simply try hundreds of settings and report the best result from the same data.
+
+It uses a deterministic staged search:
+
+1. build only **complete historical evaluation windows**;
+2. split those starts chronologically into roughly **60% selection / 20% validation / 20% newest holdout**;
+3. run a coarse grid over deployment length, buy day, IBKR pricing and FX method on the selection starts;
+4. refine locally around the strongest coarse regions;
+5. rank finalists on the validation starts using median performance, downside performance and performance versus immediate deployment;
+6. check whether nearby parameter choices also work, so a broad stable region is preferred over an isolated spike;
+7. lock one recommendation;
+8. only then evaluate that locked recommendation on the newest holdout starts.
+
+The holdout is **not** used to retune the winner. If the locked configuration deteriorates materially on the holdout, the UI displays an explicit warning instead of searching the holdout for a replacement.
+
+This reduces direct backtest overfitting but cannot remove it. Historical start windows can overlap, so the observations are not statistically independent, and past market/FX paths are not forecasts.
+
+### Automatic-search outputs
+
+The app shows:
+
+- the recommended deployment period;
+- recommended calendar buy day;
+- IBKR Pro Fixed or Tiered choice;
+- manual FX or AutoFX choice;
+- number of configurations searched;
+- stability label based on nearby configurations;
+- validation median result versus immediate deployment;
+- newest-holdout median result versus immediate deployment;
+- holdout median and 10th-percentile ending wealth;
+- holdout win rate versus immediate deployment;
+- the top finalists and their pre-holdout scores;
+- an overfitting/degradation warning when the newest holdout is materially weaker.
+
+The recommendation means **historically robust under this model**, not “the future best strategy.”
+
+## Fair-comparison rules
+
+Both automatic and manual DCA analysis enforce the following rules:
+
+- every strategy starts with the same SGD capital;
+- comparisons use a common historical comparison start;
+- every candidate uses the same terminal date for that historical window;
+- a requested evaluation horizon must be fully present in the data;
+- slower deployment does not receive an extra holding period;
+- undeployed cash earns only the configured cash yield;
+- final portfolio value is translated to SGD using historical FX.
+
+The DCA engine now rejects incomplete trailing windows instead of silently shortening the requested horizon.
+
 ## Personal-plan workflow
 
 The personal-plan tab:
@@ -46,15 +123,11 @@ The personal-plan tab:
 - replays the same plan across every complete historical start window;
 - reports worst, median and best inflation-adjusted ending liquid wealth plus liquidity-stress frequency.
 
-Brokerage costs are not yet wired into the personal cash-flow planner. The DCA lab below includes explicit buy-side IBKR transaction costs.
+Brokerage costs are not yet wired into the personal cash-flow planner. Auto strategy and Manual DCA include explicit buy-side IBKR transaction costs.
 
-## S$1m DCA lab
+## Manual DCA workflow
 
-The DCA tab is designed for the question:
-
-> I already have S$1,000,000 available. Should I invest it now or spread it out?
-
-The default capital is **S$1,000,000**, but it is editable.
+Manual DCA is retained for users who want to inspect or override the automatic assumptions.
 
 Easy deployment presets:
 
@@ -68,7 +141,7 @@ Lump sum
 36 months
 ```
 
-You can also configure:
+You can configure:
 
 - evaluation horizon;
 - calendar buy day;
@@ -80,30 +153,7 @@ You can also configure:
 - an extra Tiered venue/clearing cost estimate;
 - fully custom stock and FX fee overrides.
 
-### Fair comparison rule
-
-For each historical starting month, every deployment strategy:
-
-- starts with the same SGD capital;
-- begins on the same historical start month;
-- ends on the same historical terminal date;
-- uses equal monthly deployment tranches;
-- values the final portfolio in SGD using historical FX.
-
-This avoids giving slower DCA strategies an extra holding period.
-
-### DCA outputs
-
-The app reports:
-
-- median, 10th-percentile, worst and best ending wealth;
-- median total transaction costs;
-- stock commissions and FX fees separately;
-- median ending-wealth difference versus lump sum;
-- percentage of historical start windows where a DCA strategy beat lump sum;
-- full outcome distributions by deployment period.
-
-Historical outcomes are stress scenarios, not forecasts.
+The manual tab reports median, 10th-percentile, worst and best ending wealth, transaction costs, relative results versus lump sum, and full outcome distributions.
 
 ## IBKR Pro fee presets
 
@@ -131,8 +181,6 @@ USD 0.35 minimum per order
 ```
 
 ### LSE USD-denominated ETFs
-
-Useful for modelling USD-denominated London Stock Exchange ETFs such as an Irish UCITS ETF listing.
 
 IBKR Pro Fixed SmartRouting preset:
 
@@ -226,7 +274,7 @@ Still excluded or simplified:
 - securities lending;
 - retirement withdrawals.
 
-The personal-plan tab still excludes broker costs; the DCA tab includes buy-side commissions and FX conversion costs.
+The automatic optimizer searches only the explicitly supported controllable DCA/execution parameters. It does not optimize the ETF, the user's wealth, the evaluation horizon, or the assumed cash yield.
 
 ## Advanced execution research
 
@@ -252,10 +300,11 @@ That lab compares immediate buying, fixed pullback limits, ATR-scaled limits and
 ## Code layout
 
 ```text
-app.py                            Streamlit personal-finance + DCA MVP
+app.py                            Streamlit app; Auto strategy is the default tab
+src/retail_sp500/optimizer.py     coarse grid, local refinement, validation and holdout
 src/retail_sp500/planner.py       CPF-aware cash-flow stress tests
 src/retail_sp500/broker.py        configurable IBKR Pro transaction costs
-src/retail_sp500/dca.py           lump-sum versus DCA historical analysis
+src/retail_sp500/dca.py           common lump-sum/DCA execution and historical analysis
 src/retail_sp500/currency.py      lookahead-safe historical FX alignment
 src/retail_sp500/data.py          validated adjusted Twelve Data loader/cache
 src/retail_sp500/engine.py        existing common research engine
