@@ -173,3 +173,64 @@ def test_summary_reports_relative_results_against_lump_sum() -> None:
     assert set(summary["deployment_months"]) == {1, 6, 12}
     assert summary.loc[summary["deployment_months"] == 1, "win_rate_vs_lump_sum"].isna().all()
     assert (summary.loc[summary["deployment_months"] > 1, "median_delta_vs_lump_sum_sgd"] < 0.0).all()
+
+
+def test_run_window_rejects_incomplete_evaluation_horizon() -> None:
+    asset = _asset("2020-01-02", "2022-12-30")
+    config = DcaConfig(
+        capital_sgd=1_000_000.0,
+        deployment_months=(1,),
+        evaluation_years=5,
+    )
+    broker = ibkr_pro_preset(market="us", pricing="fixed", fx_method="none")
+
+    with pytest.raises(ValueError, match="shorter than the requested evaluation horizon"):
+        run_dca_window(
+            asset,
+            start=pd.Timestamp("2020-01-02"),
+            deployment_months=1,
+            config=config,
+            broker=broker,
+        )
+
+
+def test_explicit_common_end_keeps_different_buy_days_comparable() -> None:
+    asset = _asset("2010-01-04", "2020-12-31")
+    broker = ibkr_pro_preset(market="us", pricing="fixed", fx_method="none").__class__(
+        market="custom",
+        pricing="custom",
+        fx_method="none",
+    )
+    common_start = pd.Timestamp("2010-01-04")
+    common_end = pd.Timestamp("2015-01-02")
+    first = run_dca_window(
+        asset,
+        start=common_start,
+        deployment_months=6,
+        config=DcaConfig(
+            capital_sgd=1_000_000.0,
+            deployment_months=(6,),
+            evaluation_years=5,
+            buy_day=1,
+        ),
+        broker=broker,
+        evaluation_end=common_end,
+        cash_start=common_start,
+    )
+    second = run_dca_window(
+        asset,
+        start=common_start,
+        deployment_months=6,
+        config=DcaConfig(
+            capital_sgd=1_000_000.0,
+            deployment_months=(6,),
+            evaluation_years=5,
+            buy_day=10,
+        ),
+        broker=broker,
+        evaluation_end=common_end,
+        cash_start=common_start,
+    )
+
+    assert first["end"] == second["end"]
+    assert first["comparison_start"] == second["comparison_start"] == common_start
