@@ -1,10 +1,11 @@
 # Singapore Money Planner
 
-A personal-finance backtesting app for young Singaporeans with three workflows:
+A personal-finance planning and investment-backtesting app for Singapore retail investors with four workflows:
 
-1. **Auto strategy** — automatically search for a historically robust lump-sum/DCA and IBKR configuration for a non-technical user.
-2. **Personal plan** — stress-test salary, CPF, expenses, emergency cash and monthly investing across real historical market/FX paths.
-3. **Manual DCA** — inspect lump-sum versus DCA choices with full control over deployment and brokerage assumptions.
+1. **HiFIRE Plan** — project salary, living costs, HDB/BTO, car, children and big-ticket expenses against a target early-retirement age.
+2. **Auto strategy** — automatically search for a historically robust lump-sum/DCA and IBKR configuration for a non-technical user.
+3. **Personal plan** — stress-test a simpler salary/CPF/monthly-investing plan across real historical market/FX paths.
+4. **Manual DCA** — inspect lump-sum versus DCA choices with full control over deployment and brokerage assumptions.
 
 The older limit-order research remains available as an advanced lab instead of being the product homepage.
 
@@ -23,7 +24,7 @@ Or:
 bash scripts/app.sh
 ```
 
-The default market-data configuration uses:
+Streamlit exposes the dedicated `HiFIRE Plan` page through the multipage navigation. The market-data workflows default to:
 
 ```text
 Asset:       SPY
@@ -32,17 +33,123 @@ FX to SGD:   USD/SGD
 History:     2008-01-01 onward
 ```
 
-Downloaded data is cached under `data/*_adjusted_daily.csv`.
+Downloaded market data is cached under `data/*_adjusted_daily.csv`.
 
-## Auto strategy: default non-technical flow
+## Singapore HiFIRE life plan
 
-The first tab is designed for the question:
+The HiFIRE page is designed for the question:
+
+> Given the career I expect, the lifestyle I want and the major Singapore commitments I expect to take on, am I still on track to stop working at my target age?
+
+The life-plan engine is deliberately separate from the historical DCA optimizer. A 40-60 year household plan cannot be represented by complete chronological windows from the repository's post-2008 market history, so the HiFIRE page uses an explicit deterministic expected-return assumption while Auto Strategy remains the historical investment-strategy test.
+
+### Salary and living-cost timeline
+
+From the current age to the target FIRE age, the page creates five-year planning phases. Each phase has sliders for:
+
+- expected gross monthly salary;
+- monthly living expenses in today's SGD.
+
+Salary is treated as the expected nominal monthly salary for the selected future age band. Living expenses are inflated using the user's configured living-cost inflation assumption.
+
+At the target FIRE age, salary can automatically fall to zero. Post-retirement living costs switch to the configured desired retirement spending amount, inflated from today.
+
+### HDB / BTO planning
+
+The housing section models:
+
+- purchase/key-collection age;
+- purchase price;
+- planning equity/downpayment;
+- housing-loan rate and tenure;
+- cash share versus reported CPF-funded share of the downpayment;
+- cash share versus reported CPF-funded share of monthly instalments;
+- ongoing property running costs.
+
+Planning defaults checked **17 August 2026**:
+
+```text
+Maximum ordinary HDB-loan LTV: up to 75%
+Planning equity default:       25%
+HDB concessionary rate:        2.6% p.a. for Jul-Sep 2026
+Ordinary HDB loan-period cap:   25 years, subject to age/lease restrictions
+```
+
+The loan uses monthly-rest amortisation. CPF OA may be used for eligible housing payments, so the app allows the user to split housing payments between cash and CPF. It **does not** fabricate a future CPF OA balance or claim that enough OA will definitely be available.
+
+Official references:
+
+- HDB housing loan: https://www.hdb.gov.sg/buying-a-flat/flat-grant-and-loan-eligibility/housing-loan/housing-loan-from-hdb
+- HDB housing-loan interest: https://www.hdb.gov.sg/managing-my-home/finances/loan-matters/interest-rate
+- CPF housing usage: https://www.cpf.gov.sg/service/article/can-i-use-my-special-account-savings-to-pay-my-housing-loan
+
+### Car planning
+
+The optional car section models:
+
+- purchase age and price;
+- downpayment;
+- configurable flat annual interest rate;
+- loan tenure;
+- monthly running cost;
+- ownership period;
+- optional resale proceeds.
+
+The loan uses flat-rate repayment mathematics because flat-rate calculations are commonly used for Singapore car loans. The app does not hard-code a regulatory LTV or a guessed car price.
+
+Reference: https://www.moneysense.gov.sg/costs-of-borrowing-flat-rate-monthly-rest-and-effective-interest-rate/
+
+### Children and big-ticket expenses
+
+For each child the user can set:
+
+- the planner's age when the child is born;
+- monthly support cost in today's SGD;
+- support duration;
+- optional education lump sum and child age when it is paid.
+
+No child-cost figure is presented as a factual Singapore default.
+
+The page also supports up to five generic one-off expenses such as renovation, wedding, parental support, further education, sabbatical or major travel.
+
+### FIRE output
+
+The HiFIRE page reports:
+
+- projected liquid wealth at the target FIRE age;
+- inflation-adjusted FIRE number at the target age;
+- target-age gap or surplus;
+- FIRE funding ratio;
+- plan-end liquid wealth;
+- first projected age at which liquid wealth crosses the base FIRE number;
+- cash/CPF housing totals;
+- car and child cash costs;
+- liquidity-stress and unfunded-shortfall warnings;
+- annual cash-flow and wealth timelines.
+
+The base FIRE number is:
+
+```text
+inflation-adjusted annual retirement spending / configured withdrawal rate
+```
+
+CPF balances, home equity and car value are intentionally excluded from the liquid FIRE number in v1.
+
+The full implementation contract is in:
+
+```text
+docs/specs/singapore-hifire-life-plan-v1.md
+```
+
+## Auto strategy: non-technical investment flow
+
+Auto Strategy is designed for the question:
 
 > I have a lump sum. Search the sensible choices and tell me which configuration was most robust historically.
 
 The default capital is **S$1,000,000**, but it is editable.
 
-The user chooses only assumptions that the optimizer should not be allowed to cherry-pick:
+The user chooses assumptions that the optimizer should not be allowed to cherry-pick:
 
 - starting capital;
 - ETF and asset currency;
@@ -51,7 +158,7 @@ The user chooses only assumptions that the optimizer should not be allowed to ch
 - US or LSE USD ETF venue;
 - optional extra Tiered venue/clearing cost estimate.
 
-The app then searches controllable execution choices automatically:
+The app searches controllable execution choices automatically:
 
 - lump sum or DCA deployment length;
 - monthly buy day;
@@ -64,70 +171,65 @@ The optimizer does not simply try hundreds of settings and report the best resul
 
 It uses a deterministic staged search:
 
-1. build only **complete historical evaluation windows**;
-2. split those starts chronologically into roughly **60% selection / 20% validation / 20% newest holdout**;
-3. run a coarse grid over deployment length, buy day, IBKR pricing and FX method on the selection starts;
+1. build only complete historical evaluation windows;
+2. split starts chronologically into roughly **60% selection / 20% validation / 20% newest holdout**;
+3. run a coarse grid over deployment length, buy day, IBKR pricing and FX method on selection starts;
 4. refine locally around the strongest coarse regions;
-5. rank finalists on the validation starts using median performance, downside performance and performance versus immediate deployment;
-6. check whether nearby parameter choices also work, so a broad stable region is preferred over an isolated spike;
+5. rank finalists on validation using median performance, downside performance and performance versus immediate deployment;
+6. check nearby parameter choices so a broad stable region is preferred over an isolated spike;
 7. lock one recommendation;
 8. only then evaluate that locked recommendation on the newest holdout starts.
 
-The holdout is **not** used to retune the winner. If the locked configuration deteriorates materially on the holdout, the UI displays an explicit warning instead of searching the holdout for a replacement.
+The holdout is not used to retune the winner. Material holdout deterioration is reported instead of searching for a replacement.
 
-This reduces direct backtest overfitting but cannot remove it. Historical start windows can overlap, so the observations are not statistically independent, and past market/FX paths are not forecasts.
+This reduces direct backtest overfitting but cannot remove it. Historical start windows can overlap and past market/FX paths are not forecasts.
 
 ### Automatic-search outputs
 
 The app shows:
 
-- the recommended deployment period;
-- recommended calendar buy day;
+- recommended deployment period and buy day;
 - IBKR Pro Fixed or Tiered choice;
 - manual FX or AutoFX choice;
 - number of configurations searched;
 - stability label based on nearby configurations;
-- validation median result versus immediate deployment;
-- newest-holdout median result versus immediate deployment;
+- validation and newest-holdout results versus immediate deployment;
 - holdout median and 10th-percentile ending wealth;
-- holdout win rate versus immediate deployment;
-- the top finalists and their pre-holdout scores;
-- an overfitting/degradation warning when the newest holdout is materially weaker.
-
-The recommendation means **historically robust under this model**, not “the future best strategy.”
+- holdout win rate;
+- pre-holdout finalists;
+- an overfitting/degradation warning when appropriate.
 
 ## Fair-comparison rules
 
-Both automatic and manual DCA analysis enforce the following rules:
+Both automatic and manual DCA analysis enforce:
 
-- every strategy starts with the same SGD capital;
-- comparisons use a common historical comparison start;
-- every candidate uses the same terminal date for that historical window;
-- a requested evaluation horizon must be fully present in the data;
-- slower deployment does not receive an extra holding period;
-- undeployed cash earns only the configured cash yield;
-- final portfolio value is translated to SGD using historical FX.
+- same SGD starting capital;
+- common historical comparison start;
+- same terminal date for each historical window;
+- a fully present requested evaluation horizon;
+- no extra holding period for slower deployment;
+- only the configured yield on undeployed cash;
+- final SGD valuation using historical FX.
 
-The DCA engine now rejects incomplete trailing windows instead of silently shortening the requested horizon.
+The DCA engine rejects incomplete trailing windows instead of silently shortening the requested horizon.
 
 ## Personal-plan workflow
 
-The personal-plan tab:
+The older personal-plan tab remains as a compact historical stress test:
 
-- starts from monthly gross salary, expenses, current cash and current investments;
-- applies the 2026 CPF full-rate employee table and Ordinary Wage ceiling when enabled;
-- builds an emergency fund first, then invests monthly surplus above that reserve;
-- sells investments when monthly cash flow cannot be covered by cash;
-- uses real daily ETF and FX data;
-- converts USD assets into SGD with the most recent prior `USD/SGD` close to avoid same-date daily-close lookahead;
-- replays the same plan across every complete historical start window;
-- reports worst, median and best inflation-adjusted ending liquid wealth plus liquidity-stress frequency.
+- starting monthly gross salary, expenses, cash and investments;
+- 2026 CPF planning rules when enabled;
+- emergency-fund-first allocation;
+- monthly investing above the reserve;
+- forced investment sales when cash is insufficient;
+- real daily ETF and FX data;
+- rolling complete historical start windows.
 
-Brokerage costs are not yet wired into the personal cash-flow planner. Auto strategy and Manual DCA include explicit buy-side IBKR transaction costs.
+For long-horizon career, family and FIRE planning, use the HiFIRE page instead.
 
 ## Manual DCA workflow
 
-Manual DCA is retained for users who want to inspect or override the automatic assumptions.
+Manual DCA is retained for users who want to inspect or override automatic assumptions.
 
 Easy deployment presets:
 
@@ -141,25 +243,13 @@ Lump sum
 36 months
 ```
 
-You can configure:
-
-- evaluation horizon;
-- calendar buy day;
-- historical start-date spacing;
-- annual yield earned by undeployed cash;
-- ETF venue;
-- IBKR Pro Fixed or Tiered pricing;
-- manual spot FX or AutoFX;
-- an extra Tiered venue/clearing cost estimate;
-- fully custom stock and FX fee overrides.
-
-The manual tab reports median, 10th-percentile, worst and best ending wealth, transaction costs, relative results versus lump sum, and full outcome distributions.
+You can configure evaluation horizon, buy day, start-date spacing, cash yield, ETF venue, IBKR pricing, FX method, Tiered venue-cost estimate and fully custom stock/FX fee overrides.
 
 ## IBKR Pro fee presets
 
 Published schedule checked: **17 August 2026**.
 
-The built-in presets currently model buy-side costs for USD-traded ETFs.
+Built-in buy-side presets for USD-traded ETFs include:
 
 ### US exchange-listed ETFs
 
@@ -182,14 +272,14 @@ USD 0.35 minimum per order
 
 ### LSE USD-denominated ETFs
 
-IBKR Pro Fixed SmartRouting preset:
+IBKR Pro Fixed SmartRouting:
 
 ```text
 0.05% of trade value
 USD 4.00 minimum per order
 ```
 
-IBKR Pro Tiered preset:
+IBKR Pro Tiered:
 
 ```text
 0.05% of trade value
@@ -198,49 +288,41 @@ USD 39.00 maximum per order
 + configurable venue / clearing estimate
 ```
 
-Tiered exchange and clearing charges vary with routing and execution venue, so the app does not invent a single universal all-in figure.
-
 ### SGD to USD conversion
 
-Manual spot FX preset:
+Manual spot FX:
 
 ```text
 0.20 basis point of trade value
 USD 2.00 minimum per conversion
 ```
 
-IBKR Pro AutoFX preset:
+IBKR Pro AutoFX:
 
 ```text
 3 basis points
 ```
 
-This matters for DCA because many small conversions can repeatedly hit the manual-FX minimum.
-
 Official references:
 
-- IBKR Singapore stocks/ETFs commissions: https://www.interactivebrokers.com.sg/en/pricing/commissions-stocks.php
-- IBKR Singapore spot-currency commissions: https://www.interactivebrokers.com.sg/en/pricing/commissions-spot-currencies.php
-- IBKR Singapore ETF / Pro vs Lite pricing comparison: https://www.interactivebrokers.com.sg/en/trading/products-etfs.php
-- IBKR Singapore recurring investments: https://www.interactivebrokers.com.sg/en/trading/recurring-investments.php
+- https://www.interactivebrokers.com.sg/en/pricing/commissions-stocks.php
+- https://www.interactivebrokers.com.sg/en/pricing/commissions-spot-currencies.php
+- https://www.interactivebrokers.com.sg/en/trading/products-etfs.php
+- https://www.interactivebrokers.com.sg/en/trading/recurring-investments.php
 
-Fee schedules can change. The app stamps the preset date and exposes custom overrides so backtests do not depend on pretending the current schedule is permanent.
+Fee schedules can change. Presets are date-stamped and remain overrideable.
 
 ## Market and FX data
 
-The app reuses the repository's validated Twelve Data loader and local CSV cache.
+The investment-analysis flows reuse the repository's validated Twelve Data loader and local CSV cache.
 
-For USD assets it also loads `USD/SGD`. The currency helper aligns the **most recent prior FX close** to each asset session before converting values into SGD.
+For USD assets the app also loads `USD/SGD`. The currency helper aligns the most recent prior FX close to each asset session before converting values into SGD.
 
-Twelve Data is requested with `adjust=all`, so supported instruments are adjusted for dividends and splits. Instruments such as FX that do not provide volume are represented with zero volume because volume is not used by these simulations.
-
-The default 2008 start date stays below the existing 5,000-row provider response ceiling while retaining enough history for the supported horizons.
+Twelve Data is requested with `adjust=all`. The default 2008 start date remains below the existing 5,000-row provider response ceiling while retaining enough history for supported DCA horizons.
 
 ## CPF assumptions
 
-The personal-plan MVP uses the CPF Board's 2026 full-rate table for Singapore Citizens and third-year-and-onward Singapore Permanent Residents.
-
-For employees aged 55 and below with monthly wages above S$750:
+The current planner uses the CPF Board's 2026 full-rate contribution table as a planning baseline. For employees aged 55 and below with monthly wages above S$750:
 
 ```text
 Employer: 17%
@@ -250,35 +332,35 @@ Total:    37%
 
 The 2026 Ordinary Wage ceiling is S$8,000 per month.
 
-The app does not approximate the graduated CPF table for monthly wages of S$750 or below. Disable CPF for those scenarios until that table is modelled explicitly.
+The HiFIRE page reuses this take-home calculation but does not claim that the current contribution rates or wage ceiling will remain unchanged for decades. CPF balances are not counted as liquid FIRE wealth, and housing CPF usage is reported without pretending to know the future OA balance.
 
 Official references:
 
-- CPF Board: https://www.cpf.gov.sg/employer/employer-obligations/how-much-cpf-contributions-to-pay
-- CPF Board Ordinary Wage ceiling: https://www.cpf.gov.sg/service/article/what-is-the-ordinary-wage-ow-ceiling
-
-The selected 2026 rule set is held constant through historical scenarios. It is not a prediction of future CPF policy.
+- https://www.cpf.gov.sg/employer/employer-obligations/how-much-cpf-contributions-to-pay
+- https://www.cpf.gov.sg/service/article/what-is-the-ordinary-wage-ow-ceiling
 
 ## Current model boundaries
 
 Still excluded or simplified:
 
-- personal income tax;
+- Singapore resident income tax and individual tax reliefs;
 - bonuses and Additional Wage CPF rules;
-- CPF OA/SA/MA allocation and account interest;
-- housing purchases, mortgages and CPF housing withdrawals;
-- insurance and dependants;
-- bid/ask spread and market impact;
-- eventual selling costs and sale-side regulatory fees;
-- exact Tiered exchange/clearing charges unless entered through the configurable extra-cost field;
-- securities lending;
-- retirement withdrawals.
+- exact CPF OA/SA/MA balances, allocation, interest and future-policy changes;
+- SRS and CPF LIFE;
+- spouse/dual-income household modelling;
+- insurance adequacy and healthcare claims;
+- housing grants, eligibility, exact BTO staged-payment milestones, property resale/upgrading and CPF housing withdrawal limits;
+- car regulatory financing limits, replacement cycles, COE renewal and depreciation;
+- childcare grants/subsidies and Baby Bonus/CDA;
+- Monte Carlo/sequence-of-returns analysis for the life plan;
+- bid/ask spread, market impact and eventual sale-side investment costs;
+- estate/legacy planning.
 
-The automatic optimizer searches only the explicitly supported controllable DCA/execution parameters. It does not optimize the ETF, the user's wealth, the evaluation horizon, or the assumed cash yield.
+The automatic investment optimizer searches only explicitly supported DCA/execution parameters. It does not optimize the ETF, the user's salary/lifestyle assumptions, evaluation horizon or assumed cash yield.
 
 ## Advanced execution research
 
-The original research engine remains available for testing monthly ETF purchase policies:
+The original research engine remains available:
 
 ```text
 notebooks/retail_portfolio.ipynb
@@ -295,30 +377,30 @@ Run it with:
 ./scripts/run.sh
 ```
 
-That lab compares immediate buying, fixed pullback limits, ATR-scaled limits and historical fill-probability limits using a common contribution schedule and holdout period.
-
 ## Code layout
 
 ```text
-app.py                            Streamlit app; Auto strategy is the default tab
-src/retail_sp500/optimizer.py     coarse grid, local refinement, validation and holdout
-src/retail_sp500/planner.py       CPF-aware cash-flow stress tests
-src/retail_sp500/broker.py        configurable IBKR Pro transaction costs
-src/retail_sp500/dca.py           common lump-sum/DCA execution and historical analysis
-src/retail_sp500/currency.py      lookahead-safe historical FX alignment
-src/retail_sp500/data.py          validated adjusted Twelve Data loader/cache
-src/retail_sp500/engine.py        existing common research engine
-notebooks/retail_portfolio.ipynb  advanced execution research interface
-tests/                            deterministic unit tests
+app.py                                      Auto strategy / simple planner / Manual DCA
+pages/1_HiFIRE_Plan.py                      long-horizon Singapore HiFIRE UI
+src/retail_sp500/lifeplan.py                salary/life-event/FIRE projection engine
+src/retail_sp500/optimizer.py               coarse grid, refinement, validation, holdout
+src/retail_sp500/planner.py                 compact CPF-aware historical cash-flow tests
+src/retail_sp500/broker.py                  configurable IBKR Pro transaction costs
+src/retail_sp500/dca.py                     common DCA execution and historical analysis
+src/retail_sp500/currency.py                lookahead-safe historical FX alignment
+src/retail_sp500/data.py                    validated adjusted market-data loader/cache
+docs/specs/singapore-hifire-life-plan-v1.md implementation contract
+notebooks/retail_portfolio.ipynb            advanced execution research interface
+tests/                                      deterministic regressions
 ```
 
 ## Validation
 
 ```bash
 python -m pytest -q
-python -m compileall -q src app.py
+python -m compileall -q src app.py pages
 python -m json.tool notebooks/retail_portfolio.ipynb >/dev/null
 bash -n scripts/setup.sh scripts/run.sh scripts/app.sh
 ```
 
-The deterministic tests do not require live market access. Live behavior still depends on the configured Twelve Data account, supported symbols and API service.
+Deterministic tests do not require live market access. Live market-data behavior still depends on the configured Twelve Data account, supported symbols and API service.
