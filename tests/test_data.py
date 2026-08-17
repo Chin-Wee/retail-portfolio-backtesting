@@ -38,6 +38,14 @@ def test_parse_twelve_data_sorts_and_validates() -> None:
     assert frame.attrs["source"] == "Twelve Data"
 
 
+def test_parse_twelve_data_supports_instruments_without_volume() -> None:
+    payload = _payload()
+    for row in payload["values"]:
+        row.pop("volume")
+    frame = parse_twelve_data(payload, today=date(2024, 1, 4))
+    assert (frame["volume"] == 0.0).all()
+
+
 def test_rejects_future_or_invalid_ohlc() -> None:
     with pytest.raises(MarketDataError, match="future-dated"):
         parse_twelve_data(_payload(), today=date(2024, 1, 2))
